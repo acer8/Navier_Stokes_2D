@@ -127,7 +127,7 @@ class LinearSystem_solver():
             AL = ALuv[i]                
             A = AL[0]
             A_linop = AL[1]
-            u = scipy.sparse.linalg.bicg(A_linop, rhs, tol)
+            u = scipy.sparse.linalg.bicg(A=A_linop, b=rhs, tol=tol)
             u = u[0].reshape(row, col)
             uvl.append(u)
             AL = []
@@ -203,7 +203,7 @@ class LinearSystem_solver():
             #print mls
             residuals = []
             #accelerated_residuals = []
-            p = mls.solve(rhs,tol, accel='cg', residuals = residuals)
+            p = mls.solve(b=rhs,tol=tol, accel='cg', residuals = residuals)
             (residuals[-1]/residuals[0])**(1.0/len(residuals))
             #accelerated_residuals = np.array(accelerated_residuals)/accelerated_residuals[0]
             #r = np.max(np.abs(accelerated_residuals))

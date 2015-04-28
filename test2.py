@@ -7,14 +7,15 @@ Created on Mon Dec 29 22:26:38 2014
 
 import sys
 sys.path.append("/home/acerlinux/Documents/share_folder")
+from mpl_toolkits.mplot3d import *
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import cm
 import structure2
 import solvers2
 
-gridsize = [60,60]
-#gridsize = [30,30]
+#gridsize = [60,60]
+gridsize = [30,30]
 #gridsize = [4,4]
 m, n = gridsize
 #spatial_domain = [[0,1],[0,1]]
