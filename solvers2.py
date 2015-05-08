@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Created on Wed Dec 31 13:36:42 2014
-
-@author: acerlinux
+This file contains the iterative numerical solver which uses Projection methods
 """
 
 from __future__ import division
@@ -19,12 +17,14 @@ from matplotlib import cm
 import time
 import sys
 import copy
-sys.path.append("/home/acerlinux/Documents/share_folder")
 import structure2
 
-# this class contains the linear system solvers for both velocity and pressure
-# returns the linear system in sparse matrix form and linear operator form
+__all__ = ['LinearSystem_solver', 'Gauge_method', 'Error']
+
 class LinearSystem_solver():
+    '''this class contains the linear system solvers for both velocity and pressure
+	it returns the linear system in Scipy sparse matrix form and linear operator form'''
+
     def __init__(self, Re, mesh):
         self.mesh = mesh
         self.Re = Re
@@ -216,10 +216,9 @@ class LinearSystem_solver():
             # returns phi variable in the form of CentredPotential object
             return [structure2.CentredPotential(p, self.mesh), residuals]
 
-# class Gauge_method(structure.mesh)
-# the Gauge method main solver
-
 class Gauge_method():
+    '''This class constructs the Gauge method solver'''
+
     def __init__(self, Re, mesh):
         self.Re = Re
         self.n = mesh.n
@@ -252,7 +251,7 @@ class Gauge_method():
         initial_setup_parameters = [phi_mat_AMG, m1_mat, m2_mat, InCond_uvcmp, uv_cmp, mn_cmp]
         return initial_setup_parameters
         
-    def iterative_solver(self, Boundary_uv_type, Tn, initial_setup_parameters, Forcing_term=0):
+    def iterative_solver(self, Boundary_uv_type, Tn, initial_setup_parameters):
         n = self.n
         m = self.m
         dx = self.dx
@@ -279,23 +278,31 @@ class Gauge_method():
         
         print Tn, "number of iterations"
         # main iterative solver
+	test_problem_name = Boundary_uv_type
         for t in xrange(Tn):
+	    forcing_term = structure2.Forcing_term(self.mesh, t).select_forcing_term(test_problem_name, t)
             convc_uv = uv_cmp.non_linear_convection()
             preconvc_uv = uvold_cmp.non_linear_convection()
             diff_mn = mn_cmp.diffusion()
-            rhs_mstar = mn_int + dt*(-1.5*convc_uv + 0.5*preconvc_uv + (1.0/(2*Re))*diff_mn +\
-            Forcing_term)     
+	    if Boundary_uv_type == 'periodic_forcing_1':
+	        # Stokes problem
+	        rhs_mstar = mn_int + dt*((1.0/(2*Re))*diff_mn + forcing_term)  
+	    else:
+	        # full Navier Stokes problem
+                rhs_mstar = mn_int + dt*(-1.5*convc_uv + 0.5*preconvc_uv + (1.0/(2*Re))*diff_mn +\
+	       				forcing_term) 
+   
 #            print rhs_mstar.get_uv()[0], "rhs_m1*"
 #            print rhs_mstar.get_uv()[1], "rhs_m2*"
             
             # calculate the approximation to phi at time n+1
             gradphiuv = self.gradphi_app(phiold_cmp, phin_cmp)
-            #print gradphiuv, "gradient of phi"
+#            print gradphiuv, "gradient of phi"
             # boundary correction step
             rhs_mstarcd = self.correct_boundary(rhs_mstar, t+1, Boundary_uv_type, gradphiuv)
 #            print rhs_mstarcd.get_uv()[0], "rhs_m1* corrected"
 #            print rhs_mstarcd.get_uv()[1], "rhs_m2* corrected"
-            
+#            break 
             # solving for the Gauge variable m* 
             Linsys_solve = LinearSystem_solver(Re, self.mesh)
             mstar = Linsys_solve.Linsys_velocity_solver([m1_mat,m2_mat],  rhs_mstarcd)
@@ -313,7 +320,7 @@ class Gauge_method():
                 div_mn = mn_cmp.divergence()
 #            print div_mn.get_value(), "div_mn"	 
             # correct (normalise) phi 
-            phiacd = self.phi_correction(phi, phin_cmp, div_mstar, div_mn)
+            phiacd = self.phi_correction(phi, phin_cmp, div_mstar, div_mn, Boundary_uv_type)
 #            print phiacd.get_value(), "phi corrected"
             
             # pressure correction step
@@ -473,14 +480,14 @@ class Gauge_method():
         return rhs_mstarcd
 
     # correct (normalise) phi variable (eliminating the unwanted costant from the Pressure Poisson solver)
-    def phi_correction(self, phi, phin_cmp, div_mstar, div_mn):
+    def phi_correction(self, phi, phin_cmp, div_mstar, div_mn, Boundary_uv_type):
         n = self.n
         m = self.m
         Re = self.Re
         dx = self.dx
         dy = self.dy
         dt = self.dt
-
+	
         phia = phi.get_value() - phin_cmp[1:m+1,1:n+1]
         phiaW = 1.875*phia[:,0] - 1.25*phia[:,1] + 0.375*phia[:,2]
         div_mstarW = 1.875*div_mstar[:,0] - 1.25*div_mstar[:,1] + 0.375*div_mstar[:,2]
@@ -511,6 +518,7 @@ class Gauge_method():
         cSW = phiaSW - (dt*(div_mstarSW+div_mnSW))/(2*Re)
         cSE = phiaSE - (dt*(div_mstarSE+div_mnSE))/(2*Re)
         c = (cNW+cNE+cSW+cSE)/4.0
+	
         print c, "correction"
         phiacd = phia - c
         return structure2.CentredPotential(phiacd, self.mesh)
@@ -556,8 +564,9 @@ class Gauge_method():
 
         return structure2.VelocityField(m1star_cmp, m2star_cmp, self.mesh)
         
-# class calculates the error norms for the solver
 class Error():
+    ''' This class calculates the error norms for the solver by comparing the numerical and analyticalsolutions'''
+
     def __init__(self, uv_cmp, uv_exact_bnd, p, p_exact, div_uv, mesh):
         self.mesh = mesh
         self.uv_cmp = uv_cmp

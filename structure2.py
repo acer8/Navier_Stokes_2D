@@ -1,19 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-Created on Mon Dec 29 15:27:12 2014
-
-@author: acerlinux
+This file sets up the basic structure of the numerical solver, including
+the spatial geometry and the structure of velocity and potential fields.
 """
 
 from __future__ import division
 import numpy as np
-#from scipy.sparse.linalg import LinearOperator
-#import scipy.sparse
-#import scipy.sparse.linalg as slg
-#from pyamg import smoothed_aggregation_solver
-#from pylab import plot, draw, axis, clf, title, ion, ioff, contourf, show, streamplot
-#from time import sleep
-#import pylab
 import time
 
 ##import inspect
@@ -30,8 +22,11 @@ import time
 # spatial_domain = [[xl, xr], [yl,yr]]
 # time_domain = [t0, tend]
 
+__all__ = ['mesh', 'VelocityField', 'VelocityComplete', 
+	'InitialCondition', 'CentredPotential', 'Exact_solutions']
+
 class mesh:
-    def __init__(self, gridsize, spatial_domain, time_domain, CFL):
+    def __init__(self, gridsize, spatial_domain, time_domain, CFL, Re):
         # m: row, n: column
         self.gds = gridsize
         self.m = gridsize[0]
@@ -52,6 +47,7 @@ class mesh:
         self.yu = np.linspace(start=self.sdomain[1][0]+0.5*self.dy, stop=self.sdomain[1][1]-0.5*self.dy,num=self.m)
         self.xv = np.linspace(start=self.sdomain[0][0]+0.5*self.dx, stop=self.sdomain[0][1]-0.5*self.dx,num=self.n)
         self.yv = np.linspace(start=self.sdomain[1][0], stop=self.sdomain[1][1],num=self.m+1)
+	self.Re = Re
 
     # functions ubndmg, vbndmg, uintmg, vintmg and pintmg returns the meshgrids for velocities and pressure
     # bnd: include boundary points; int: only contains interior points
@@ -281,7 +277,7 @@ class VelocityComplete:
             return vbnd_value
 
     # returns the boundary points for the second type of forced flow problems
-    def bnd_forcing_2(self, u):
+    def bnd_forcing_1(self, u):
         tn = self.dt*self.t + self.t0
         xu, yu = self.xu, self.yu
         xv, yv = self.xv, self.yv
@@ -302,7 +298,7 @@ class VelocityComplete:
             return vbnd_value
 
     # returns the boundary points for the third type of forced flow problems
-    def bnd_foring_3(self, u):
+    def bnd_forcing_2(self, u):
         tn = self.dt*self.t + self.t0
         xu, yu = self.xu, self.yu
         xv, yv = self.xv, self.yv
@@ -362,16 +358,27 @@ class VelocityComplete:
             vE = self.bnd_forcing_1('v')['E']
 
         elif Boundary_type == "periodic_forcing_2":
-            uN = self.bnd_foring_2('u')['N']
-            uS = self.bnd_foring_2('u')['S']
-            uW = self.bnd_foring_2('u')['W']
-            uE = self.bnd_foring_2('u')['E']
+            uN = self.bnd_forcing_2('u')['N']
+            uS = self.bnd_forcing_2('u')['S']
+            uW = self.bnd_forcing_2('u')['W']
+            uE = self.bnd_forcing_2('u')['E']
         
-            vN = self.bnd_foring_2('v')['N']
-            vS = self.bnd_foring_2('v')['S']
-            vW = self.bnd_foring_2('v')['W']
-            vE = self.bnd_foring_2('v')['E']
+            vN = self.bnd_forcing_2('v')['N']
+            vS = self.bnd_forcing_2('v')['S']
+            vW = self.bnd_forcing_2('v')['W']
+            vE = self.bnd_forcing_2('v')['E']
         
+        elif Boundary_type == "periodic_forcing_3":
+            uN = self.bnd_forcing_3('u')['N']
+            uS = self.bnd_forcing_3('u')['S']
+            uW = self.bnd_forcing_3('u')['W']
+            uE = self.bnd_forcing_3('u')['E']
+        
+            vN = self.bnd_forcing_3('v')['N']
+            vS = self.bnd_forcing_3('v')['S']
+            vW = self.bnd_forcing_3('v')['W']
+            vE = self.bnd_forcing_3('v')['E']
+
         u = np.zeros((m+2,n+1))
         v = np.zeros((m+1,n+2))
         u[1:m+1,1:n] = self.uv_int[0]
@@ -419,6 +426,7 @@ class InitialCondition:
         self.Yvint = mesh.vintmg("y")
         self.XPint = mesh.pintmg("x")
         self.YPint = mesh.pintmg("y")
+	self.Re = mesh.Re
         
     # zero inition condition for velocity fields
     def zero_uv(self):
@@ -456,10 +464,24 @@ class InitialCondition:
         return icP
     
     # Taylor flow problem
-    def Taylor_P(self, Re):
+    def Taylor_P(self):
         XPint, YPint = self.XPint, self.YPint
-        P = -Re*0.25*(np.cos(2*XPint) + np.cos(2*YPint))
+        P = -self.Re*0.25*(np.cos(2*XPint) + np.cos(2*YPint))
         return P
+
+    def select_initial_conditions(self, test_problem_name):
+	if test_problem_name == 'Taylor':
+	    Init_uv = self.Taylor_uv()
+	    Init_P = self.Taylor_P()
+	elif test_problem_name == 'periodic_forcing_1':
+	    Init_uv = self.zero_uv()
+	    Init_P = self.zero_P()
+	elif test_problem_name == 'driven_cavity':
+	    Init_uv = self.zero_uv()
+	    Init_P = self.zero_P()
+
+	return Init_uv, Init_P
+	    
     
 class CentredPotential():
     def __init__(self, p_int, mesh):
@@ -556,6 +578,9 @@ class CentredPotential():
 # class contains the exact solutions which are used in error analysis and comparisons with the numerical solutions
 # only has unforced Talyor flow solutions at the moment, others can be added later
 # the returned exact solutions contain interior and boundary points
+# the velocity fields are evaluated at integer indices (e.g k = 1, 2, 3...) whereas 
+# pressure fields are evaluated at half integer indices (e.g k = 1/2, 3/2, 5/2 ...)
+
 class Exact_solutions():
     def __init__(self, mesh, Re, t):
         self.mesh = mesh
@@ -577,11 +602,85 @@ class Exact_solutions():
         XPint, YPint = self.XPint, self.YPint
         
         tn = dt*t + self.mesh.tdomain[0]
+	tnhalf = dt*(t-0.5) + self.mesh.tdomain[0]
 
         if Solution_type == "Taylor":
             U_exact_bnd = -np.cos(Xubnd)*np.sin(Yubnd)*np.exp(-2*tn)
             V_exact_bnd = np.sin(Xvbnd)*np.cos(Yvbnd)*np.exp(-2*tn)
-            tnhalf = dt*(t-0.5) + self.mesh.tdomain[0]
             P_exact = -Re*0.25*(np.cos(2*XPint) + np.cos(2*YPint))*np.exp(-4*tnhalf)
-            return VelocityField(U_exact_bnd, V_exact_bnd, self.mesh), CentredPotential(P_exact, self.mesh)
+
+
+	elif Solution_type == 'periodic_forcing_1':
+	    U_exact_bnd = np.pi*np.sin(tn)*np.sin(2*np.pi*Yubnd)*(np.sin(np.pi*Xubnd)**2)
+	    V_exact_bnd = -np.pi*np.sin(tn)*np.sin(2*np.pi*Xvbnd)*(np.sin(np.pi*Yvbnd)**2)
+	    P_exact = np.sin(tnhalf)*np.sin(np.pi*YPint)*np.cos(np.pi*XPint)
+											            
+	return VelocityField(U_exact_bnd, V_exact_bnd, self.mesh), CentredPotential(P_exact, self.mesh)
+ 
+class Forcing_term:
+    '''This class contains the external forcing term that are required for some flow problems e.g periodic_forcing_1'''
+    def __init__(self, mesh, t):
+        self.n = mesh.n
+        self.m = mesh.m
+        self.xu = mesh.xu
+        self.yu = mesh.yu
+        self.xv = mesh.xv
+        self.yv = mesh.yv
+        self.gds = mesh.gds
+        self.sdomain = mesh.sdomain
+        self.tdomain = mesh.tdomain
+        self.Tn = mesh.Tn
+        self.t0 = mesh.tdomain[0]
+        self.dt = mesh.dt
+        self.dx = mesh.dx
+        self.dy = mesh.dy
+        self.t = t
+	self.Re = mesh.Re
+	
+    def periodic_forcing_1(self, t):
+        n = self.n
+        m = self.m
+        dx = self.dx
+        dy = self.dy
+        dt = self.dt
+        Re = self.Re
+	# change all Xu and Xv, Yu, Yv into xu, xv, yu, yv
+        Xu, Yu = np.meshgrid(self.xu, self.yu)
+        Xv, Yv = np.meshgrid(self.xv, self.yv)
         
+        tn = dt*t + self.tdomain[0]
+        # these forcing terms include boundary points
+        Fx = np.pi*np.cos(tn)*np.sin(2*np.pi*Yu)*(np.sin(np.pi*Xu)**2) -\
+             2*(np.pi**3)*np.sin(tn)*np.sin(2*np.pi*Yu)*(np.cos(2*np.pi*Xu) - 2*(np.sin(np.pi*Xu)**2)) -\
+             np.pi*np.sin(tn)*np.sin(np.pi*Yu)*np.sin(np.pi*Xu)
+        Fy = -np.pi*np.cos(tn)*np.sin(2*np.pi*Xv)*(np.sin(np.pi*Yv)**2) -\
+             2*(np.pi**3)*np.sin(tn)*np.sin(2*np.pi*Xv)*(2*(np.sin(np.pi*Yv)**2) - np.cos(2*np.pi*Yv)) +\
+             np.pi*np.sin(tn)*np.cos(np.pi*Xv)*np.cos(np.pi*Yv)
+
+        return [Fx[:,1:n], Fy[1:m,:]]
+
+    def periodic_forcing_2(self, t):
+        n = self.n
+        m = self.m
+        dx = self.dx
+        dy = self.dy
+        dt = self.dt
+        Re = self.Re
+        Xu, Yu = np.meshgrid(self.xu, self.yu)
+        Xv, Yv = np.meshgrid(self.xv, self.yv)      
+
+        tn = dt*t + self.tdomain[0]
+        # these forcing terms include boundary points
+        Fx = np.cos(Xu + tn)*np.sin(Yu + tn) + np.cos(Yu + tn)*np.sin(Xu + tn) +\
+             2*np.sin(Xu + tn)*np.sin(Yu + tn)+ np.cos(Xu - Yu + tn)
+        Fy = -np.sin(Xv + tn)*np.cos(Yv + tn) - np.sin(Yv + tn)*np.cos(Xv + tn) +\
+             2*np.cos(Xv + tn)*np.cos(Yv + tn)- np.cos(Xv - Yv + tn)
+        
+        return [Fx[:,1:n], Fy[1:m,:]]
+
+    def select_forcing_term(self, test_problem_name, t):
+	if test_problem_name == 'periodic_forcing_1':
+	    forcing_term = self.periodic_forcing_1(t)
+	else:
+	    forcing_term = 0
+	return forcing_term
