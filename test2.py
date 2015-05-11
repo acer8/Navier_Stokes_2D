@@ -14,49 +14,71 @@ import structure2
 import solvers2
 
 def get_inputs():
-	xl, xr = raw_input('Enter the end points of the spatial domain (e.g 0,1): ').split(',')
+	space_input = raw_input('Enter the end points of the spatial domain (e.g 0,1): ')
+	while space_input == '':
+		# take default
+		space_input = '0,1'
 	try:
+		xl, xr = space_input.split(',')
 		xl = float(xl)
 		xr = float(xr)
 	except ValueError:
-		print 'End points must be float or integers, try again'
-		xl, xr = raw_input('Enter the end points of the spatial domain (e.g 0,1): ').split(',')
+		xl, xr = raw_input('End points must be float or integers, separate them by a comma (,) now try again: ').split(',')
 		xl = float(xl)
 		xr = float(xr)
-
-	t0, tf = raw_input('Enter the start and end time (e.g 0,1): ').split(',')
-	try:
-		t0 = float(t0)
-		tf = float(tf)
-	except ValueError:
-		print 'Time must be float or integers, try again'
-		xl, xr = raw_input('Enter the start and end time (e.g 0,1): ').split(',')
-		t0 = float(t0)
-		tf = float(tf)
-	try:
-		gridsize = int(raw_input('Enter the size of the spatial grid (e.g 30): '))
-	except ValueError:
-		print 'Grid size must be integers, try again'
-		gridsize = int(raw_input('Enter the size of the spatial grid (e.g 30): '))
 	
-	method_dict = {1:'Gauge', 2:'Alg1', 3:'Alg2', 4:'Alg3'}
+	time_input = raw_input('Enter the start and end time (e.g 0,1): ')
+	while time_input == '':
+		# take default
+		time_input = '0,1'
 	try:
-		method_index = int(raw_input('Choose the numerical algorithm from below [1:Gauge, 2:Alg1, 3:Alg2, 4:Alg3]: '))
+		t0, tf = time_input.split(',')
+		t0 = float(t0)
+		tf = float(tf)
+	except ValueError:
+		time_input = raw_input('Time must be float or integers, separate start and end time by a comma (,) now try again: ').split(',')
+		t0 = float(time_input[0])
+		tf = float(time_input[1])
+	
+	gridsize = raw_input('Enter the size of the spatial grid (e.g 30): ')
+	while gridsize == '':
+		# take default value
+		gridsize = 30
+	try:
+		gridsize = int(gridsize)
+	except ValueError:
+		gridsize = int(raw_input('Grid size must be integers, try again: '))
+		
+	method_dict = {1:'Gauge', 2:'Alg1', 3:'Alg2', 4:'Alg3'}
+	method_index = raw_input('Choose the numerical algorithm from below [1:Gauge, 2:Alg1, 3:Alg2, 4:Alg3]: ')
+	while method_index == '':
+		# take default
+		method_index = 1
+	try:
+		method_index = int(method_index)
 	except ValueError:
 		method_index = int(raw_input('index of the method must be integers, try again: '))
 	method = method_dict[method_index]
 
 	test_problem_dict = {1:'Taylor', 2:'periodic_forcing_1', 
 				3:'periodic_forcing_2', 4:'periodic_forcing_3', 5:'driven_cavity'}
+	test_problem_index = raw_input('Choose the test problem from below [1:Taylor, 2:periodic_forcing_1, 3:periodic_forcing_2, 4:periodic_forcing_3, 5:driven_cavity]: ')
+	while test_problem_index == '':
+		# take default
+		test_problem_index = 1
 	try:				
-		test_problem_index = int(raw_input('Choose the test problem from below [1:Taylor, 2:periodic_forcing_1, 3:periodic_forcing_2, 4:periodic_forcing_3, 5:driven_cavity]: '))
+		test_problem_index = int(test_problem_index)
 	except 	ValueError:
 		test_problem_index = int(raw_input('index of the test problem must be integers, try again: '))
 	test_problem_name = test_problem_dict[test_problem_index]
+
 	plot_option = raw_input('plot result optional (Y/N): ')
 	if 'Y' in plot_option:
 		plot_option = True
 	elif 'y' in plot_option:
+		plot_option = True
+	elif plot_option == '':
+		# take default
 		plot_option = True
 	else:
 		plot_option = False
@@ -88,7 +110,28 @@ def run_Navier_Stokes_solver(xl, xr, t0, tf, gridsize, method, test_problem_name
 		init_setup = Gauge.setup(ic_uv_init, test_problem_name)
 		# iterative solve process
 		uvf_cmp, pf = Gauge.iterative_solver(test_problem_name, mesh.Tn, init_setup)
+#		print pf.get_value()
 
+	elif method == 'Alg1':
+		ic_init = structure2.InitialCondition(mesh).select_initial_conditions(test_problem_name)
+		# use Gauge method
+		Alg1 = solvers2.Alg1_method(Re, mesh)
+		# initial set up
+		init_setup = Alg1.setup(ic_init, test_problem_name)
+		# iterative solve process
+		uvf_cmp, pf = Alg1.iterative_solver(test_problem_name, mesh.Tn, init_setup)
+#		print uvf_cmp.get_uv(), pf.get_value()
+	
+	elif method == 'Alg2':
+		ic_uv_init = structure2.InitialCondition(mesh).select_initial_conditions(test_problem_name)[0]
+		# use Alg2 method
+		Alg2 = solvers2.Alg2_method(Re, mesh)
+		# initial set up
+		init_setup = Alg2.setup(ic_uv_init, test_problem_name)
+		# iterative solve process
+		uvf_cmp, pf = Alg2.iterative_solver(test_problem_name, mesh.Tn, init_setup)
+#		print pf.get_value()
+	
 	# comparison and error analysis
 	if test_problem_name == 'driven_cavity':
 		# no analytical solutions available

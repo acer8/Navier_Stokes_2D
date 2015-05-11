@@ -19,7 +19,7 @@ import sys
 import copy
 import structure2
 
-__all__ = ['LinearSystem_solver', 'Gauge_method', 'Error']
+__all__ = ['LinearSystem_solver', 'Gauge_method', 'Alg1', 'Error']
 
 class LinearSystem_solver():
     '''this class contains the linear system solvers for both velocity and pressure
@@ -564,6 +564,528 @@ class Gauge_method():
 
         return structure2.VelocityField(m1star_cmp, m2star_cmp, self.mesh)
         
+class Alg1_method():
+    '''This class constructs the Alg 1 method solver'''
+
+    def __init__(self, Re, mesh):
+        self.Re = Re
+        self.n = mesh.n
+        self.m = mesh.m
+        self.xu = mesh.xu
+        self.yu = mesh.yu
+        self.xv = mesh.xv
+        self.yv = mesh.yv
+        self.gds = mesh.gds
+        self.sdomain = mesh.sdomain
+        self.tdomain = mesh.tdomain
+        self.Tn = mesh.Tn
+        self.t0 = mesh.tdomain[0]
+        self.dt = mesh.dt
+        self.dx = mesh.dx
+        self.dy = mesh.dy
+        self.mesh = mesh
+    
+    # initial set up
+    def setup(self, InCond, Boundary_uv_type):
+        ## InCond_uv: specifies the velocity initial condition 
+        linsys_solver = LinearSystem_solver(self.Re, self.mesh)
+        phi_mat_AMG = linsys_solver.Poisson_pressure_matrix("AMG")
+        u_mat = linsys_solver.Linsys_velocity_matrix("u")
+        v_mat = linsys_solver.Linsys_velocity_matrix("v")
+        
+        InCond_uvcmp = structure2.VelocityComplete(self.mesh, InCond[0], 0).complete(Boundary_uv_type)
+        uvn_cmp = copy.copy(InCond_uvcmp)
+	InCond_p = structure2.CentredPotential(InCond[1], self.mesh)
+        initial_setup_parameters = [phi_mat_AMG, u_mat, v_mat, InCond_uvcmp, uvn_cmp, InCond_p]
+        return initial_setup_parameters
+        
+    def iterative_solver(self, Boundary_uv_type, Tn, initial_setup_parameters):
+        n = self.n
+        m = self.m
+        dx = self.dx
+        dy = self.dy
+        dt = self.dt
+        Re = self.Re
+        phi_mat_AMG = initial_setup_parameters[0]
+        u_mat = initial_setup_parameters[1]
+        v_mat = initial_setup_parameters[2]
+        # uvold_cmp: u and v velocity fields at time n-1
+        # cmp: in the completed format (interior + boundary + ghost nodes)
+        uvold_cmp = initial_setup_parameters[3]
+        # uvn_cmp: u and v at time n
+        uvn_cmp = initial_setup_parameters[4]
+	pold = initial_setup_parameters[5]
+        pn = copy.copy(pold)
+#	print pn.get_value(), 'initial pressure'
+#	phiold = np.zeros((m,n))
+#	phin = np.copy(phiold)
+
+        print Tn, "number of iterations"
+        # main iterative solver
+	test_problem_name = Boundary_uv_type
+        for t in xrange(Tn):
+	    forcing_term = structure2.Forcing_term(self.mesh, t).select_forcing_term(test_problem_name, t)
+            convc_uv = uvn_cmp.non_linear_convection()
+            preconvc_uv = uvold_cmp.non_linear_convection()
+            diff_uvn = uvn_cmp.diffusion()
+	    gradp_uvn = pn.gradient()
+	    uvn_int = structure2.VelocityField(uvn_cmp.get_int_uv()[0], uvn_cmp.get_int_uv()[1], self.mesh)
+	    if Boundary_uv_type == 'periodic_forcing_1':
+	        # Stokes problem
+	        rhs_uvstar = uvn_int + dt*(- gradp_uvn + (1.0/(2*Re))*diff_uvn + forcing_term)  
+	    else:
+	        # full Navier Stokes problem
+                rhs_uvstar = uvn_int + dt*(-1.5*convc_uv + 0.5*preconvc_uv - gradp_uvn + (1.0/(2*Re))*diff_uvn + forcing_term) 
+#  	    print uvn_int.get_uv()[0], 'u int'
+#	    print uvn_int.get_uv()[1], 'v int'
+#            print rhs_uvstar.get_uv()[0], "rhs_u*"
+#            print rhs_uvstar.get_uv()[1], "rhs_v*"
+
+	    # boundary correction step
+            rhs_uvstarcd = self.correct_boundary(rhs_uvstar, t+1, Boundary_uv_type)
+#            print rhs_uvstarcd.get_uv()[0], "rhs_u* corrected"
+#            print rhs_uvstarcd.get_uv()[1], "rhs_v* corrected"
+#            break 
+            # solving for the intermediate velocity variable uv* 
+            Linsys_solve = LinearSystem_solver(Re, self.mesh)
+            uvstar = Linsys_solve.Linsys_velocity_solver([u_mat,v_mat],  rhs_uvstarcd)
+#            print uvstar.get_uv()[0], "u*"
+#            print uvstar.get_uv()[1], "v*"
+            uvstarcmp, uvbnd_value = structure2.VelocityComplete(self.mesh, [uvstar.get_uv()[0],  uvstar.get_uv()[1]], t+1).complete(Boundary_uv_type, return_bnd=True)
+            div_uvstar = uvstarcmp.divergence()
+            # solving for the phi variable
+            [phi, residuals] = Linsys_solve.Poisson_pressure_solver(div_uvstar/dt, "AMG", phi_mat_AMG)
+#            print phi.get_value(), "phi"
+            # correct (normalise) phi 
+            phicd = self.phi_correction(phi, div_uvstar, Boundary_uv_type)
+#            print phicd.get_value(), "phi corrected"
+            
+            # pressure correction step
+            p = pn + phicd - div_uvstar/(2*Re)
+            pold = copy.copy(pn)
+            pn = copy.copy(p)
+#            phiold_cmp = np.copy(phin_cmp)
+#            phin_cmp = np.copy(phi.complete())
+            # velocity update stemp
+            gradphi = phi.gradient()
+    ##        print gradphi[0], "gradphi u"
+    ##        print gradphi[1], "gradphi v"
+            uvn_int = uvstar - dt*gradphi
+#            print uvn_int.get_uv()[0], "u new interior"
+#            print uvn_int.get_uv()[1], "v new interior"
+            uvold_cmp = copy.copy(uvn_cmp)
+            uvn_cmp = structure2.VelocityComplete(self.mesh, [uvn_int.get_uv()[0],  uvn_int.get_uv()[1]], t+1).complete(Boundary_uv_type)
+#            print uvn_cmp.get_uv()[0], "u new complete"
+#            print uvn_cmp.get_uv()[1], "v new complete"
+#            print uvn_cmp.get_int_uv()[0], "u new interior"
+#            print uvn_cmp.get_int_uv()[1], "v new interior"            
+            print "iteration "+str(t)
+#            break
+        return uvn_cmp, p
+
+    ## this function calculates graident of phi at time n+1
+    # using second order approximation to gradient of phi^(n+1). Used in correcting m*
+
+    # boundary correction 
+    def correct_boundary(self, rhs_uvstar, t, Boundary_type):
+        # rhsuv is a VelocityField object with dimension interior u and v [(m*(n-1), (m-1)*n)]
+        n = self.n
+        m = self.m
+        Re = self.Re
+        dx = self.dx
+        dy = self.dy
+        dt = self.dt
+        
+        lam = dt/(2.0*Re)
+        VC = structure2.VelocityComplete(self.mesh, [rhs_uvstar.get_uv()[0], rhs_uvstar.get_uv()[1]], t)
+        
+        if Boundary_type == "driven_cavity":
+            uN = VC.bnd_driven_cavity('u')['N']
+            uS = VC.bnd_driven_cavity('u')['S']
+            uW = VC.bnd_driven_cavity('u')['W']
+            uE = VC.bnd_driven_cavity('u')['E']
+        
+            vN = VC.bnd_driven_cavity('v')['N']
+            vS = VC.bnd_driven_cavity('v')['S']
+            vW = VC.bnd_driven_cavity('v')['W']
+            vE = VC.bnd_driven_cavity('v')['E']
+
+        elif Boundary_type == "Taylor":
+            uN = VC.bnd_Taylor('u')['N'][1:n]
+            uS = VC.bnd_Taylor('u')['S'][1:n]
+            uW = VC.bnd_Taylor('u')['W']
+            uE = VC.bnd_Taylor('u')['E']
+        
+            vN = VC.bnd_Taylor('v')['N']
+            vS = VC.bnd_Taylor('v')['S']
+            vW = VC.bnd_Taylor('v')['W'][1:m]
+            vE = VC.bnd_Taylor('v')['E'][1:m]
+        elif Boundary_type == "periodic_forcing_1":
+            uN = VC.bnd_forcing_1('u')['N'][1:n]
+            uS = VC.bnd_forcing_1('u')['S'][1:n]
+            uW = VC.bnd_forcing_1('u')['W']
+            uE = VC.bnd_forcing_1('u')['E']
+        
+            vN = VC.bnd_forcing_1('v')['N']
+            vS = VC.bnd_forcing_1('v')['S']
+            vW = VC.bnd_forcing_1('v')['W'][1:m]
+            vE = VC.bnd_forcing_1('v')['E'][1:m]
+
+        elif Boundary_type == "periodic_forcing_2":
+            uN = VC.bnd_foring_2('u',t)['N'][1:n]
+            uS = VC.bnd_foring_2('u',t)['S'][1:n]
+            uW = VC.bnd_foring_2('u',t)['W']
+            uE = VC.bnd_foring_2('u',t)['E']
+        
+            vN = VC.bnd_foring_2('v',t)['N']
+            vS = VC.bnd_foring_2('v',t)['S']
+            vW = VC.bnd_foring_2('v',t)['W'][1:m]
+            vE = VC.bnd_foring_2('v',t)['E'][1:m]
+        
+        # North and South boundary
+        resu1 = np.zeros((m,n-1))
+        resu2 = np.zeros((m,n-1))
+        resu1[0,:] = (16.0/5)*uN*(lam/(dy**2))
+        resu1[-1,:] = (16.0/5)*uS*(lam/(dy**2))            
+            
+        # West and East boundary
+        resu2[:,0] = uW*(lam/(dx**2))
+        resu2[:,-1] = uE*(lam/(dx**2))
+        resu = resu1+resu2
+        
+        resv1 = np.zeros((m-1,n))
+        resv2 = np.zeros((m-1,n))
+
+        # North and South boundary
+        resv2[0,:] = vN*(lam/(dy**2))
+        resv2[-1,:] = vS*(lam/(dy**2))
+
+        # West and East boundary
+        resv1[:,0] = (16.0/5)*vW*(lam/(dx**2))
+        resv1[:,-1] = (16.0/5)*vE*(lam/(dx**2))
+        
+        resv = resv1+resv2
+        rhs_uvstarcd = rhs_uvstar + [resu, resv]
+        
+        return rhs_uvstarcd
+
+    # correct (normalise) phi variable (eliminating the unwanted costant from the Pressure Poisson solver)
+    def phi_correction(self, phi, div_uvstar, Boundary_uv_type):
+        n = self.n
+        m = self.m
+        Re = self.Re
+        dx = self.dx
+        dy = self.dy
+        dt = self.dt
+	
+        phiW = 1.875*phi[:,0] - 1.25*phi[:,1] + 0.375*phi[:,2]
+        div_uvstarW = 1.875*div_uvstar[:,0] - 1.25*div_uvstar[:,1] + 0.375*div_uvstar[:,2]       
+        phiE = 1.875*phi[:,-1] - 1.25*phi[:,-2] + 0.375*phi[:,-3]
+        div_uvstarE = 1.875*div_uvstar[:,-1] - 1.25*div_uvstar[:,-2] + 0.375*div_uvstar[:,-3]       
+        phiNW = 1.875*phiW[0] - 1.25*phiW[1] + 0.375*phiW[2]
+        div_uvstarNW = 1.875*div_uvstarW[0] - 1.25*div_uvstarW[1] + 0.375*div_uvstarW[2]
+        phiNE = 1.875*phiE[0] - 1.25*phiE[1] + 0.375*phiE[2]
+        div_uvstarNE = 1.875*div_uvstarE[0] - 1.25*div_uvstarE[1] + 0.375*div_uvstarE[2]
+        phiSW = 1.875*phiW[-1] - 1.25*phiW[-2] + 0.375*phiW[-3]
+        div_uvstarSW = 1.875*div_uvstarW[-1] - 1.25*div_uvstarW[-2] + 0.375*div_uvstarW[-3]       
+        phiSE = 1.875*phiE[-1] - 1.25*phiE[-2] + 0.375*phiE[-3]
+        div_uvstarSE = 1.875*div_uvstarE[-1] - 1.25*div_uvstarE[-2] + 0.375*div_uvstarE[-3]
+
+	cNW = phiNW - div_uvstarNW/(2*Re)
+        cNE = phiNE - div_uvstarNE/(2*Re)
+        cSW = phiSW - div_uvstarSW/(2*Re)
+        cSE = phiSE - div_uvstarSE/(2*Re)
+        c = (cNW+cNE+cSW+cSE)/4.0
+	
+        print c, "correction"
+        phicd = phi - c
+	return phicd
+
+class Alg2_method():
+    '''This class constructs the Alg2 method (pressure free) solver'''
+
+    def __init__(self, Re, mesh):
+        self.Re = Re
+        self.n = mesh.n
+        self.m = mesh.m
+        self.xu = mesh.xu
+        self.yu = mesh.yu
+        self.xv = mesh.xv
+        self.yv = mesh.yv
+        self.gds = mesh.gds
+        self.sdomain = mesh.sdomain
+        self.tdomain = mesh.tdomain
+        self.Tn = mesh.Tn
+        self.t0 = mesh.tdomain[0]
+        self.dt = mesh.dt
+        self.dx = mesh.dx
+        self.dy = mesh.dy
+        self.mesh = mesh
+    
+    # initial set up
+    def setup(self, InCond_uv_init, Boundary_uv_type):
+        ## InCond_uv: specifies the velocity initial condition 
+        linsys_solver = LinearSystem_solver(self.Re, self.mesh)
+        phi_mat_AMG = linsys_solver.Poisson_pressure_matrix("AMG")
+        u_mat = linsys_solver.Linsys_velocity_matrix("u")
+        v_mat = linsys_solver.Linsys_velocity_matrix("v")
+        
+        InCond_uvcmp = structure2.VelocityComplete(self.mesh, InCond_uv_init, 0).complete(Boundary_uv_type)
+        uv_cmp = copy.copy(InCond_uvcmp)        
+        initial_setup_parameters = [phi_mat_AMG, u_mat, v_mat, InCond_uvcmp, uv_cmp]
+        return initial_setup_parameters
+        
+    def iterative_solver(self, Boundary_uv_type, Tn, initial_setup_parameters):
+        n = self.n
+        m = self.m
+        dx = self.dx
+        dy = self.dy
+        dt = self.dt
+        Re = self.Re
+        phi_mat_AMG = initial_setup_parameters[0]
+        u_mat = initial_setup_parameters[1]
+        v_mat = initial_setup_parameters[2]
+        # uvold_cmp: u and v velocity fields at time n-1
+        # cmp: in the completed format (interior + boundary + ghost nodes)
+        uvold_cmp = initial_setup_parameters[3]
+        # uvn_cmp: u and v at time n
+        uvn_cmp = initial_setup_parameters[4]
+        # int: interior points only
+        uvn_int = structure2.VelocityField(uvn_cmp.get_int_uv()[0], uvn_cmp.get_int_uv()[1], self.mesh)
+        # phiold: phi variable at time n-1
+        phiold = np.zeros((m,n))
+        phiold_cmp = structure2.CentredPotential(phiold, self.mesh).complete()
+        # phin_cmp: phi variable at time n
+        phin_cmp = np.copy(phiold_cmp)
+        
+        print Tn, "number of iterations"
+        # main iterative solver
+	test_problem_name = Boundary_uv_type
+        for t in xrange(Tn):
+	    forcing_term = structure2.Forcing_term(self.mesh, t).select_forcing_term(test_problem_name, t)
+            convc_uv = uvn_cmp.non_linear_convection()
+            preconvc_uv = uvold_cmp.non_linear_convection()
+            diff_uvn = uvn_cmp.diffusion()
+	    if Boundary_uv_type == 'periodic_forcing_1':
+	        # Stokes problem
+	        rhs_uvstar = uvn_int + dt*((1.0/(2*Re))*diff_uvn + forcing_term)  
+	    else:
+	        # full Navier Stokes problem
+                rhs_uvstar = uvn_int + dt*(-1.5*convc_uv + 0.5*preconvc_uv + (1.0/(2*Re))*diff_uvn + forcing_term) 
+   
+#            print rhs_uvstar.get_uv()[0], "rhs_u*"
+#            print rhs_uvstar.get_uv()[1], "rhs_v*"
+            
+            # calculate the approximation to phi at time n+1
+            gradphiuv = self.gradphi_app(phiold_cmp, phin_cmp)
+#            print gradphiuv, "gradient of phi"
+            # boundary correction step
+            rhs_uvstarcd = self.correct_boundary(rhs_uvstar, t+1, Boundary_uv_type, gradphiuv)
+#            print rhs_mstarcd.get_uv()[0], "rhs_m1* corrected"
+#            print rhs_mstarcd.get_uv()[1], "rhs_m2* corrected"
+#            break 
+            # solving for the Gauge variable m* 
+            Linsys_solve = LinearSystem_solver(Re, self.mesh)
+            uvstar = Linsys_solve.Linsys_velocity_solver([u_mat,v_mat],  rhs_uvstarcd)
+#            print uvstar.get_uv()[0], "u*"
+#            print uvstar.get_uv()[1], "v*"
+            uvstarcmp = structure2.VelocityComplete(self.mesh, [uvstar.get_uv()[0],  uvstar.get_uv()[1]], t+1).complete(Boundary_uv_type)
+            div_uvstar = uvstarcmp.divergence()
+            # solving for the phi variable
+            [phi, residuals] = Linsys_solve.Poisson_pressure_solver(div_uvstar/dt, "AMG", phi_mat_AMG)
+            #print phi.get_value(), "phi"
+            # correct (normalise) phi 
+            phicd = self.phi_correction(phi, div_uvstar, Boundary_uv_type)
+#            print phiacd.get_value(), "phi corrected"
+            
+            # pressure correction step
+            p = phicd - div_uvstar/(2*Re)
+            phiold_cmp = np.copy(phin_cmp)
+            phin_cmp = np.copy(phi.complete())
+            # velocity update stemp
+            gradphi = phi.gradient()
+    ##        print gradphi[0], "gradphi u"
+    ##        print gradphi[1], "gradphi v"
+            uvn_int = uvstar - dt*gradphi
+#            print uvn_int.get_uv()[0], "u new interior"
+#            print uvn_int.get_uv()[1], "v new interior"
+            uvold_cmp = copy.copy(uvn_cmp)
+            uvn_cmp = structure2.VelocityComplete(self.mesh, [uvn_int.get_uv()[0],  uvn_int.get_uv()[1]], t+1).complete(Boundary_uv_type)
+#            print uv_cmp.get_uv()[0], "u new complete"
+#            print uv_cmp.get_uv()[1], "v new complete"
+#            print uv_cmp.get_int_uv()[0], "u new interior"
+#            print uv_cmp.get_int_uv()[1], "v new interior"            
+            print "iteration "+str(t)
+            #break
+        return uvn_cmp, p
+
+    ## this function calculates graident of phi at time n+1
+    # using second order approximation to gradient of phi^(n+1). Used in correcting m*
+    # phi^{n+1} appro 2*phi^n - phi^{n-1}
+    def gradphi_app(self, phiold_cmp, phin_cmp):
+        n = self.n
+        m = self.m
+        dx = self.dx
+        dy = self.dy
+        dt = self.dt
+        
+        phiapp_cmp = 2*phin_cmp - phiold_cmp
+        gradphiu = (phiapp_cmp[:,1:n+2] - phiapp_cmp[:,0:n+1])/dx
+        gradphiv = (phiapp_cmp[1:m+2,:] - phiapp_cmp[0:m+1,:])/dy
+        # obtain gradphiu North and South boundary by cubic interpolation
+        gradphiuN = 5.0/16*(gradphiu[0,:] +3*gradphiu[1,:] - gradphiu[2,:]+0.2*gradphiu[3,:])
+        gradphiuS = 5.0/16*(gradphiu[-1,:] +3*gradphiu[-2,:] - gradphiu[-3,:]+0.2*gradphiu[-4,:])
+        gradphiu[0,:] = gradphiuN
+        gradphiu[-1,:] = gradphiuS
+
+        # obtain gradphiv West and East boundary by cubic interpolation
+        gradphivW = 5.0/16*(gradphiv[:,0] +3*gradphiv[:,1] - gradphiv[:,2]+0.2*gradphiv[:,3])
+        gradphivE = 5.0/16*(gradphiv[:,-1] +3*gradphiv[:,-2] - gradphiv[:,-3]+0.2*gradphiv[:,-4])
+        gradphiv[:,0] = gradphivW
+        gradphiv[:,-1] = gradphivE
+        return [gradphiu, gradphiv]
+
+    # boundary correction used in solving for Gauge variable
+    def correct_boundary(self, rhs_uvstar, t, Boundary_type, gradphiuv):
+        # rhsuv is a VelocityField object with dimension interior u and v [(m*(n-1), (m-1)*n)]
+        n = self.n
+        m = self.m
+        Re = self.Re
+        dx = self.dx
+        dy = self.dy
+        dt = self.dt
+        
+        lam = dt/(2.0*Re)
+        VC = structure2.VelocityComplete(self.mesh, [rhs_uvstar.get_uv()[0], rhs_uvstar.get_uv()[1]], t)
+        gradphiu = gradphiuv[0]
+        gradphiv = gradphiuv[1]
+        
+        if Boundary_type == "driven_cavity":
+            uN = VC.bnd_driven_cavity('u')['N']
+            uS = VC.bnd_driven_cavity('u')['S']
+            uW = VC.bnd_driven_cavity('u')['W']
+            uE = VC.bnd_driven_cavity('u')['E']
+        
+            vN = VC.bnd_driven_cavity('v')['N']
+            vS = VC.bnd_driven_cavity('v')['S']
+            vW = VC.bnd_driven_cavity('v')['W']
+            vE = VC.bnd_driven_cavity('v')['E']
+
+        elif Boundary_type == "Taylor":
+            uN = VC.bnd_Taylor('u')['N'][1:n]
+            uS = VC.bnd_Taylor('u')['S'][1:n]
+            uW = VC.bnd_Taylor('u')['W']
+            uE = VC.bnd_Taylor('u')['E']
+        
+            vN = VC.bnd_Taylor('v')['N']
+            vS = VC.bnd_Taylor('v')['S']
+            vW = VC.bnd_Taylor('v')['W'][1:m]
+            vE = VC.bnd_Taylor('v')['E'][1:m]
+        elif Boundary_type == "periodic_forcing_1":
+            uN = VC.bnd_forcing_1('u')['N'][1:n]
+            uS = VC.bnd_forcing_1('u')['S'][1:n]
+            uW = VC.bnd_forcing_1('u')['W']
+            uE = VC.bnd_forcing_1('u')['E']
+        
+            vN = VC.bnd_forcing_1('v')['N']
+            vS = VC.bnd_forcing_1('v')['S']
+            vW = VC.bnd_forcing_1('v')['W'][1:m]
+            vE = VC.bnd_forcing_1('v')['E'][1:m]
+
+        elif Boundary_type == "periodic_forcing_2":
+            uN = VC.bnd_foring_2('u',t)['N'][1:n]
+            uS = VC.bnd_foring_2('u',t)['S'][1:n]
+            uW = VC.bnd_foring_2('u',t)['W']
+            uE = VC.bnd_foring_2('u',t)['E']
+        
+            vN = VC.bnd_foring_2('v',t)['N']
+            vS = VC.bnd_foring_2('v',t)['S']
+            vW = VC.bnd_foring_2('v',t)['W'][1:m]
+            vE = VC.bnd_foring_2('v',t)['E'][1:m]
+                
+        gradphiuW = gradphiu[1:m+1,0]
+        gradphiuE = gradphiu[1:m+1,-1]
+        gradphiuN = gradphiu[0,1:n]
+        gradphiuS = gradphiu[-1,1:n]
+        
+        # North and South boundary
+        uNbc = uN + dt*gradphiuN
+        uSbc = uS + dt*gradphiuS
+
+        resu1 = np.zeros((m,n-1))
+        resu2 = np.zeros((m,n-1))
+        resu1[0,:] = (16.0/5)*(uNbc)*(lam/(dy**2))
+        resu1[-1,:] = (16.0/5)*(uSbc)*(lam/(dy**2))            
+            
+        # West and East boundary
+        uWbc = uW
+        uEbc = uE
+        resu2[:,0] = (uWbc)*(lam/(dx**2))
+        resu2[:,-1] = (uEbc)*(lam/(dx**2))
+        resu = resu1+resu2
+        
+        resv1 = np.zeros((m-1,n))
+        resv2 = np.zeros((m-1,n))
+        
+        gradphivN = gradphiv[0,1:n+1]
+        gradphivS = gradphiv[-1,1:n+1]
+        gradphivW = gradphiv[1:m,0]
+        gradphivE = gradphiv[1:m,-1]
+
+        # North and South boundary
+        vNbc = vN
+        vSbc = vS
+        resv2[0,:] = vNbc*(lam/(dy**2))
+        resv2[-1,:] = vSbc*(lam/(dy**2))
+
+        # West and East boundary
+        vWbc = vW + dt*gradphivW
+        vEbc = vE + dt*gradphivE
+        resv1[:,0] = (16.0/5)*vWbc*(lam/(dx**2))
+        resv1[:,-1] = (16.0/5)*vEbc*(lam/(dx**2))
+        
+        resv = resv1+resv2
+        rhs_uvstarcd = rhs_uvstar + [resu, resv]
+        
+        return rhs_uvstarcd
+
+    # correct (normalise) phi variable (eliminating the unwanted costant from the Pressure Poisson solver)
+    def phi_correction(self, phi, div_uvstar, Boundary_uv_type):
+        n = self.n
+        m = self.m
+        Re = self.Re
+        dx = self.dx
+        dy = self.dy
+        dt = self.dt
+	
+        phiW = 1.875*phi[:,0] - 1.25*phi[:,1] + 0.375*phi[:,2]
+        div_uvstarW = 1.875*div_uvstar[:,0] - 1.25*div_uvstar[:,1] + 0.375*div_uvstar[:,2]
+        
+        phiE = 1.875*phi[:,-1] - 1.25*phi[:,-2] + 0.375*phi[:,-3]
+        div_uvstarE = 1.875*div_uvstar[:,-1] - 1.25*div_uvstar[:,-2] + 0.375*div_uvstar[:,-3]
+        
+        phiNW = 1.875*phiW[0] - 1.25*phiW[1] + 0.375*phiW[2]
+        div_uvstarNW = 1.875*div_uvstarW[0] - 1.25*div_uvstarW[1] + 0.375*div_uvstarW[2]
+
+        phiNE = 1.875*phiE[0] - 1.25*phiE[1] + 0.375*phiE[2]
+        div_uvstarNE = 1.875*div_uvstarE[0] - 1.25*div_uvstarE[1] + 0.375*div_uvstarE[2]
+
+        phiSW = 1.875*phiW[-1] - 1.25*phiW[-2] + 0.375*phiW[-3]
+        div_uvstarSW = 1.875*div_uvstarW[-1] - 1.25*div_uvstarW[-2] + 0.375*div_uvstarW[-3]
+        
+        phiSE = 1.875*phiE[-1] - 1.25*phiE[-2] + 0.375*phiE[-3]
+        div_uvstarSE = 1.875*div_uvstarE[-1] - 1.25*div_uvstarE[-2] + 0.375*div_uvstarE[-3]
+
+        cNW = phiNW - div_uvstarNW/(2*Re)
+        cNE = phiNE - div_uvstarNE/(2*Re)
+        cSW = phiSW - div_uvstarSW/(2*Re)
+        cSE = phiSE - div_uvstarSE/(2*Re)
+        c = (cNW+cNE+cSW+cSE)/4.0
+	
+        print c, "correction"
+        phicd = phi - c
+        return phicd
+
 class Error():
     ''' This class calculates the error norms for the solver by comparing the numerical and analyticalsolutions'''
 
@@ -613,3 +1135,4 @@ class Error():
         perror_dict = {'L1': L1p, 'L2': L2p, 'Linf': Linfp}
 
         return perror_dict
+
