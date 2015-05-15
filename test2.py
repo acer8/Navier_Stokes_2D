@@ -14,18 +14,50 @@ import structure2
 import solvers2
 
 def get_inputs():
+	test_problem_dict = {1:'Taylor', 2:'periodic_forcing_1', 
+				3:'periodic_forcing_2', 4:'periodic_forcing_3', 5:'driven_cavity'}
+	test_problem_index = raw_input('Choose the test problem from below [1:Taylor, 2:periodic_forcing_1, 3:periodic_forcing_2, 4:periodic_forcing_3, 5:driven_cavity]: ')
+	while test_problem_index == '':
+		# take default
+		test_problem_index = 1
+	try:				
+		test_problem_index = int(test_problem_index)
+	except 	ValueError:
+		test_problem_index = int(raw_input('index of the test problem must be integers, try again: '))
+	test_problem_name = test_problem_dict[test_problem_index]
+
+	method_dict = {1:'Gauge', 2:'Alg1', 3:'Alg2', 4:'Alg3'}
+	method_index = raw_input('Choose the numerical algorithm from below [1:Gauge, 2:Alg1, 3:Alg2, 4:Alg3]: ')
+	while method_index == '':
+		# take default
+		method_index = 1
+	try:
+		method_index = int(method_index)
+	except ValueError:
+		method_index = int(raw_input('index of the method must be integers, try again: '))
+	method = method_dict[method_index]
+
 	space_input = raw_input('Enter the end points of the spatial domain (e.g 0,1): ')
 	while space_input == '':
-		# take default
-		space_input = '0,1'
+		# take default (different for each problem)
+		if test_problem_name == 'Taylor':
+			space_input = [-np.pi/4.0, np.pi/4.0]
+		elif test_problem_name == 'periodic_forcing_1':
+			space_input = [-1,1]
+		else:
+			space_input = [0,1]
 	try:
 		xl, xr = space_input.split(',')
 		xl = float(xl)
 		xr = float(xr)
-	except ValueError:
-		xl, xr = raw_input('End points must be float or integers, separate them by a comma (,) now try again: ').split(',')
-		xl = float(xl)
-		xr = float(xr)
+	except:
+		if isinstance(space_input, list) == True:
+			xl = space_input[0]
+			xr = space_input[1]
+		else:
+			xl, xr = raw_input('End points must be float or integers, separate them by a comma (,) now try again: ').split(',')
+			xl = float(xl)
+			xr = float(xr)
 	
 	time_input = raw_input('Enter the start and end time (e.g 0,1): ')
 	while time_input == '':
@@ -48,29 +80,6 @@ def get_inputs():
 		gridsize = int(gridsize)
 	except ValueError:
 		gridsize = int(raw_input('Grid size must be integers, try again: '))
-		
-	method_dict = {1:'Gauge', 2:'Alg1', 3:'Alg2', 4:'Alg3'}
-	method_index = raw_input('Choose the numerical algorithm from below [1:Gauge, 2:Alg1, 3:Alg2, 4:Alg3]: ')
-	while method_index == '':
-		# take default
-		method_index = 1
-	try:
-		method_index = int(method_index)
-	except ValueError:
-		method_index = int(raw_input('index of the method must be integers, try again: '))
-	method = method_dict[method_index]
-
-	test_problem_dict = {1:'Taylor', 2:'periodic_forcing_1', 
-				3:'periodic_forcing_2', 4:'periodic_forcing_3', 5:'driven_cavity'}
-	test_problem_index = raw_input('Choose the test problem from below [1:Taylor, 2:periodic_forcing_1, 3:periodic_forcing_2, 4:periodic_forcing_3, 5:driven_cavity]: ')
-	while test_problem_index == '':
-		# take default
-		test_problem_index = 1
-	try:				
-		test_problem_index = int(test_problem_index)
-	except 	ValueError:
-		test_problem_index = int(raw_input('index of the test problem must be integers, try again: '))
-	test_problem_name = test_problem_dict[test_problem_index]
 
 	plot_option = raw_input('plot result optional (Y/N): ')
 	if 'Y' in plot_option:
