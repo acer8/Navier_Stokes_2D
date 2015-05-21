@@ -35,9 +35,10 @@ class mesh:
         self.tdomain = time_domain
         self.CFL = CFL
         # dt: delta t
-        self.dt = abs(((self.sdomain[0][1] - self.sdomain[0][0])/self.gds[0])*CFL)
+        self.dt1 = abs(((self.sdomain[0][1] - self.sdomain[0][0])/self.gds[0])*CFL)
         # tn: number of iterations
-        self.Tn = int(round(self.tdomain[1]/self.dt))
+        self.Tn = int(round(self.tdomain[1]/self.dt1))
+	self.dt = abs(float(self.tdomain[1] - self.tdomain[0]))/self.Tn
         # dx, dy: delta x and delta y
         self.dx = abs(float(self.sdomain[0][1] - self.sdomain[0][0]))/self.n
         self.dy = abs(float(self.sdomain[1][1] - self.sdomain[1][0]))/self.m
@@ -592,6 +593,10 @@ class Exact_solutions():
         self.Yvbnd = mesh.vbndmg("y")
         self.XPint = mesh.pintmg("x")
         self.YPint = mesh.pintmg("y")
+	self.Xuint = mesh.uintmg("x")
+	self.Yuint = mesh.uintmg("y")
+	self.Xvint = mesh.vintmg("x")
+	self.Yvint = mesh.vintmg("y")
         
     def Exact_solutions(self, Solution_type):
         dt = self.mesh.dt
@@ -600,26 +605,31 @@ class Exact_solutions():
         Xubnd, Yubnd = self.Xubnd, self.Yubnd
         Xvbnd, Yvbnd = self.Xvbnd, self.Yvbnd
         XPint, YPint = self.XPint, self.YPint
-        
+        Xuint, Yuint = self.Xuint, self.Yuint
+        Xvint, Yvint = self.Xvint, self.Yvint       
+
         tn = dt*t + self.mesh.tdomain[0]
 	tnhalf = dt*(t-0.5) + self.mesh.tdomain[0]
 
         if Solution_type == "Taylor":
             U_exact_bnd = -np.cos(Xubnd)*np.sin(Yubnd)*np.exp(-2*tn)
             V_exact_bnd = np.sin(Xvbnd)*np.cos(Yvbnd)*np.exp(-2*tn)
-            P_exact = -Re*0.25*(np.cos(2*XPint) + np.cos(2*YPint))*np.exp(-4*tnhalf)
-
+            P_exact = -(1/(4*Re))*(np.cos(2*XPint) + np.cos(2*YPint))*np.exp(-4*tnhalf)
+	    gradpu_exact = (1/(2*Re))*np.sin(2*Xuint)*np.exp(-4*tnhalf)
+	    gradpv_exact = (1/(2*Re))*np.sin(2*Yvint)*np.exp(-4*tnhalf)
 
 	elif Solution_type == 'periodic_forcing_1':
 	    U_exact_bnd = np.pi*np.sin(tn)*np.sin(2*np.pi*Yubnd)*(np.sin(np.pi*Xubnd)**2)
 	    V_exact_bnd = -np.pi*np.sin(tn)*np.sin(2*np.pi*Xvbnd)*(np.sin(np.pi*Yvbnd)**2)
 	    P_exact = np.sin(tnhalf)*np.sin(np.pi*YPint)*np.cos(np.pi*XPint)
-											            
-	return VelocityField(U_exact_bnd, V_exact_bnd, self.mesh), CentredPotential(P_exact, self.mesh)
+	    gradpu_exact = -np.pi*np.sin(tnhalf)*np.sin(np.pi*Xuint)*np.sin(np.pi*Yuint)
+	    gradpv_exact = np.pi*np.sin(tnhalf)*np.cos(np.pi*Xvint)*np.cos(np.pi*Yvint)
+
+	return VelocityField(U_exact_bnd, V_exact_bnd, self.mesh), CentredPotential(P_exact, self.mesh), VelocityField(gradpu_exact, gradpv_exact, self.mesh)
  
 class Forcing_term:
     '''This class contains the external forcing term that are required for some flow problems e.g periodic_forcing_1'''
-    def __init__(self, mesh, t):
+    def __init__(self, mesh, test_problem_name, t):
         self.n = mesh.n
         self.m = mesh.m
         self.xu = mesh.xu
@@ -635,36 +645,46 @@ class Forcing_term:
         self.dx = mesh.dx
         self.dy = mesh.dy
         self.t = t
+	self.test_problem_name = test_problem_name
 	self.Re = mesh.Re
 	
-    def periodic_forcing_1(self, t):
+    def periodic_forcing_1(self):
+        print 'periodic_forcing_1'
         n = self.n
         m = self.m
         dx = self.dx
         dy = self.dy
         dt = self.dt
+	t = self.t
         Re = self.Re
 	# change all Xu and Xv, Yu, Yv into xu, xv, yu, yv
         Xu, Yu = np.meshgrid(self.xu, self.yu)
         Xv, Yv = np.meshgrid(self.xv, self.yv)
-        
+#        print t, dt, self.tdomain[0]
+#	print np.sin(2*np.pi*Yu)
+#	print np.pi*np.cos(tn)
+#	print Yu
+
         tn = dt*t + self.tdomain[0]
         # these forcing terms include boundary points
         Fx = np.pi*np.cos(tn)*np.sin(2*np.pi*Yu)*(np.sin(np.pi*Xu)**2) -\
              2*(np.pi**3)*np.sin(tn)*np.sin(2*np.pi*Yu)*(np.cos(2*np.pi*Xu) - 2*(np.sin(np.pi*Xu)**2)) -\
              np.pi*np.sin(tn)*np.sin(np.pi*Yu)*np.sin(np.pi*Xu)
+
         Fy = -np.pi*np.cos(tn)*np.sin(2*np.pi*Xv)*(np.sin(np.pi*Yv)**2) -\
              2*(np.pi**3)*np.sin(tn)*np.sin(2*np.pi*Xv)*(2*(np.sin(np.pi*Yv)**2) - np.cos(2*np.pi*Yv)) +\
              np.pi*np.sin(tn)*np.cos(np.pi*Xv)*np.cos(np.pi*Yv)
-
+#	print Fx, 'Fx'
+#	print Fy, 'Fy'
         return [Fx[:,1:n], Fy[1:m,:]]
 
-    def periodic_forcing_2(self, t):
+    def periodic_forcing_2(self): 
         n = self.n
         m = self.m
         dx = self.dx
         dy = self.dy
         dt = self.dt
+	t = self.t
         Re = self.Re
         Xu, Yu = np.meshgrid(self.xu, self.yu)
         Xv, Yv = np.meshgrid(self.xv, self.yv)      
@@ -678,9 +698,9 @@ class Forcing_term:
         
         return [Fx[:,1:n], Fy[1:m,:]]
 
-    def select_forcing_term(self, test_problem_name, t):
-	if test_problem_name == 'periodic_forcing_1':
-	    forcing_term = self.periodic_forcing_1(t)
+    def select_forcing_term(self):
+	if self.test_problem_name == 'periodic_forcing_1':
+	    forcing_term = self.periodic_forcing_1()
 	else:
 	    forcing_term = 0
 	return forcing_term

@@ -1,10 +1,5 @@
 # -*- coding: utf-8 -*-
-"""
-Created on Mon Dec 29 22:26:38 2014
-
-@author: acerlinux
-"""
-
+from __future__ import division
 import sys
 from mpl_toolkits.mplot3d import *
 import numpy as np
@@ -88,7 +83,7 @@ def get_inputs():
 		plot_option = True
 	elif plot_option == '':
 		# take default
-		plot_option = True
+		plot_option = False
 	else:
 		plot_option = False
 
@@ -103,6 +98,8 @@ def run_Navier_Stokes_solver(xl, xr, t0, tf, gridsize, method, test_problem_name
 	mesh = structure2.mesh(grid_size_domain,spatial_domain,time_domain,CFL,Re)
 	print mesh.dx, "dx"
 	print mesh.dt, "dt"
+	print spatial_domain, 'spatial domain'
+	print time_domain, 'time domain'
 	Xubnd = mesh.ubndmg("x")
 	Yubnd = mesh.ubndmg("y")
 	Xvbnd = mesh.vbndmg("x")
@@ -118,7 +115,7 @@ def run_Navier_Stokes_solver(xl, xr, t0, tf, gridsize, method, test_problem_name
 		# initial set up
 		init_setup = Gauge.setup(ic_uv_init, test_problem_name)
 		# iterative solve process
-		uvf_cmp, pf = Gauge.iterative_solver(test_problem_name, mesh.Tn, init_setup)
+		uvf_cmp, pf, gradp = Gauge.iterative_solver(test_problem_name, mesh.Tn, init_setup)
 #		print pf.get_value()
 
 	elif method == 'Alg1':
@@ -128,7 +125,7 @@ def run_Navier_Stokes_solver(xl, xr, t0, tf, gridsize, method, test_problem_name
 		# initial set up
 		init_setup = Alg1.setup(ic_init, test_problem_name)
 		# iterative solve process
-		uvf_cmp, pf = Alg1.iterative_solver(test_problem_name, mesh.Tn, init_setup)
+		uvf_cmp, pf, gradp = Alg1.iterative_solver(test_problem_name, mesh.Tn, init_setup)
 #		print uvf_cmp.get_uv(), pf.get_value()
 	
 	elif method == 'Alg2':
@@ -138,7 +135,7 @@ def run_Navier_Stokes_solver(xl, xr, t0, tf, gridsize, method, test_problem_name
 		# initial set up
 		init_setup = Alg2.setup(ic_uv_init, test_problem_name)
 		# iterative solve process
-		uvf_cmp, pf = Alg2.iterative_solver(test_problem_name, mesh.Tn, init_setup)
+		uvf_cmp, pf, gradp = Alg2.iterative_solver(test_problem_name, mesh.Tn, init_setup)
 #		print pf.get_value()
 	
 	# comparison and error analysis
@@ -146,15 +143,28 @@ def run_Navier_Stokes_solver(xl, xr, t0, tf, gridsize, method, test_problem_name
 		# no analytical solutions available
 		pass
 	else:
-		uv_exact_bnd, p_exact = structure2.Exact_solutions(mesh, Re, mesh.Tn).Exact_solutions(test_problem_name)
+		uv_exact_bnd, p_exact, gradp_exact = structure2.Exact_solutions(mesh, Re, mesh.Tn).Exact_solutions(test_problem_name)
 		div_uvf = uvf_cmp.divergence()
-		
-		Error = solvers2.Error(uvf_cmp, uv_exact_bnd, pf, p_exact, div_uvf, mesh)
+		print np.sum(p_exact.get_value()), 'integral of exact pressure'
+#		print p_exact.get_value(), 'exact pressure'
+#		pc = np.sum(p_exact.get_value())
+#		area_domain = (spatial_domain[0][1] - spatial_domain[0][0])**2
+#		d = pc/area_domain
+#		print area_domain, 'area of domain'
+#		print d, 'constant'
+#		p_exact = p_exact - pc
+#		print p_exact.get_value(), 'exact pressure normalised'
+#		print np.sum(p_exact.get_value()), 'integral of exact pressure normalised' 	
+		Error = solvers2.Error(uvf_cmp, uv_exact_bnd, pf, p_exact, gradp, gradp_exact, div_uvf, mesh)
 		Velocity_error = Error.velocity_error()
 		Pressure_error = Error.pressure_error()
+		gradpu_error, gradpv_error, avg_gradp_error = Error.pressure_gradient_error()
 		print "U velocity error is %s " % Velocity_error[0]
 		print "V velocity error is %s " % Velocity_error[1]
 		print "Pressure error is %s " % Pressure_error
+		print "gradient P u error is %s " % gradpu_error
+		print "gradient P v error is %s " % gradpv_error
+		print "average gradient Pressure error is %s " % avg_gradp_error
 	
 	if plot_option == False:
 		return None

@@ -145,6 +145,7 @@ class LinearSystem_solver():
         n = self.mesh.n
         dx = self.mesh.dx
         dy = self.mesh.dy
+	print m, 'm', n, 'n'
         # for square domain only, lx = ky and dx = dy = dh
         dh = dx
         # construct matrix A: Ap = rhs, p is pressure (with interior points)
@@ -159,20 +160,45 @@ class LinearSystem_solver():
         A2 = scipy.sparse.kron(B, scipy.sparse.eye(m,n))
         A = A1+A2
         A = scipy.sparse.csc_matrix(A)
+	# add the zero integral constraint
+	A = scipy.sparse.vstack([A,scipy.sparse.csc_matrix(np.ones((1, m*n)))])
+	# add one zero column to make sure A is square
+	b = np.ones(m*n+1)
+	b[-1] = 0
+	b = b.reshape((m*n+1, 1))
+	A = scipy.sparse.hstack([A,scipy.sparse.csc_matrix(b)])
+	A = scipy.sparse.csc_matrix(A)
+        #print A.todense()
+#	Ad = A.todense()
+#	print np.linalg.cond(Ad), 'condition number of A'
+#	G = scipy.sparse.identity(m*n)
+#	P1 = scipy.sparse.vstack([G,scipy.sparse.csc_matrix(np.ones((1, m*n)))])
+#	P = scipy.sparse.hstack([P1,scipy.sparse.csc_matrix(b)])
+#	print P.todense(), 'P'
+#	An = scipy.sparse.linalg.inv(P)*A
+#	And = An.todense()
+#	print And
+#	print np.linalg.cond(And)
         if preconditioner == "ILU":
             A_linop = scipy.sparse.linalg.aslinearoperator(A)
             A_ILU = slg.spilu(A,permc_spec='MMD_AT_PLUS_A')
-            M = slg.LinearOperator(shape=(m*n,m*n),matvec=A_ILU.solve)
-            #print A.todense()
+	    #A_ILU = slg.spilu(A,permc_spec='MMD_ATA')
+	    #A_ILU = slg.spilu(A,permc_spec='COLAMD')
+            M = slg.LinearOperator(shape=(m*n+1,m*n+1),matvec=A_ILU.solve)
             return [A_linop, M, A]
         
         elif preconditioner == "AMG":
-            A = scipy.sparse.csr_matrix(A)
+	    SA_build_args={'max_levels':10, 'max_coarse':25, 'coarse_solver':'pinv2', 'symmetry':'symmetric'}
+	    A = scipy.sparse.csr_matrix(A)
             B = np.ones((A.shape[0],1)) 
-            mls = smoothed_aggregation_solver(A, B, max_coarse=10)
-            #print A.todense()
+#            mls = smoothed_aggregation_solver(A, B, max_coarse=10, **SA_build_args)
+	    mls = smoothed_aggregation_solver(A, B, **SA_build_args)
             return mls, A
         
+	# direct solve
+	elif preconditioner == "DIR":
+            return A
+
     # solves the Pressure Poisson problem using algebraic multigrid method
     def Poisson_pressure_solver(self, rhs, preconditioner, precd_AL, tol=1e-12):
         m = self.mesh.m
@@ -187,34 +213,65 @@ class LinearSystem_solver():
         rhs = rhs.get_value()
         #print type(rhs)
         rhs = (-rhs).reshape(m*n)
+	# add the zero integration constraint to the right hand side
+	rhs = np.hstack([rhs, np.zeros(1)])
+#	print rhs, 'rhs'
         N = m*n
         if preconditioner == "ILU":
             # use Incomplete LU to find a preconditioner
             A_linop = precd_AL[0]
             M = precd_AL[1]
             A = precd_AL[2]
-            p = scipy.sparse.linalg.cg(A_linop, rhs, tol, maxiter=N, M=M)
-            p = p[0].reshape(m,n)
+            p = scipy.sparse.linalg.bicgstab(A=A_linop, b=rhs, tol=tol, maxiter=N, M=M)[0]
+	    #p = scipy.sparse.linalg.minres(A=A_linop, b=rhs, tol=tol, maxiter=N, M=M)[0]
+	    #print A.shape()
+            Ap = A*np.matrix(np.ravel(p)).T
+            r = rhs - np.array(Ap.T)
+            #print r, "rp"
+            print np.max(np.abs(r)), "residual"
+	    print p[-1], 'lambda constant'
+	    p = p[:-1]
+            p = p.reshape(m,n)
+	    print np.sum(p), 'integral of phi'
             return structure2.CentredPotential(p, self.mesh)
         
         elif preconditioner == "AMG":
             # use Algebraic Multigrid method
-            mls, A = precd_AL
+	    SA_solve_args={'cycle':'V', 'maxiter':15}
+	    mls, A = precd_AL
             #print mls
             residuals = []
             #accelerated_residuals = []
-            p = mls.solve(b=rhs,tol=tol, accel='cg', residuals = residuals)
+            p = mls.solve(b=rhs,tol=tol, accel='cg', residuals = residuals, **SA_solve_args)
             (residuals[-1]/residuals[0])**(1.0/len(residuals))
             #accelerated_residuals = np.array(accelerated_residuals)/accelerated_residuals[0]
             #r = np.max(np.abs(accelerated_residuals))
             #print r, "residuals"
-            p = p.reshape(m,n)
             Ap = A*np.matrix(np.ravel(p)).T
             r = rhs - np.array(Ap.T)
             #print r, "rp"
-            #print np.max(np.abs(r)), "residual"
+            print np.max(np.abs(r)), "residual"
+	    print p[-1], 'lambda constant'
+	    # remove the dummy variable
+	    p = p[:-1]
+            p = p.reshape(m,n)
             # returns phi variable in the form of CentredPotential object
             return [structure2.CentredPotential(p, self.mesh), residuals]
+
+        elif preconditioner == "DIR":
+            # use Incomplete LU to find a preconditioner
+            A = precd_AL
+	    p = scipy.sparse.linalg.spsolve(A=A, b=rhs)
+	    #print A.shape()
+            Ap = A*np.matrix(np.ravel(p)).T
+            r = rhs - np.array(Ap.T)
+            #print r, "rp"
+            print np.max(np.abs(r)), "residual"
+	    print p[-1], 'lambda constant'
+	    p = p[:-1]
+            p = p.reshape(m,n)
+	    print np.sum(p), 'integral of phi'
+            return structure2.CentredPotential(p, self.mesh)
 
 class Gauge_method():
     '''This class constructs the Gauge method solver'''
@@ -238,27 +295,30 @@ class Gauge_method():
         self.mesh = mesh
     
     # initial set up
-    def setup(self, InCond_uv_init, Boundary_uv_type):
+    def setup(self, InCond_uv_init, Boundary_uv_type, preconditioner='ILU'):
         ## InCond_uv: specifies the velocity initial condition 
         linsys_solver = LinearSystem_solver(self.Re, self.mesh)
-        phi_mat_AMG = linsys_solver.Poisson_pressure_matrix("AMG")
+	phi_mat = linsys_solver.Poisson_pressure_matrix(preconditioner)
         m1_mat = linsys_solver.Linsys_velocity_matrix("u")
         m2_mat = linsys_solver.Linsys_velocity_matrix("v")
         
         InCond_uvcmp = structure2.VelocityComplete(self.mesh, InCond_uv_init, 0).complete(Boundary_uv_type)
+#	print InCond_uvcmp.get_uv()[0], 'initial u'
+#	print InCond_uvcmp.get_uv()[1], 'initial v'
         uv_cmp = copy.copy(InCond_uvcmp)        
         mn_cmp = copy.copy(uv_cmp)
-        initial_setup_parameters = [phi_mat_AMG, m1_mat, m2_mat, InCond_uvcmp, uv_cmp, mn_cmp]
+        #initial_setup_parameters = [phi_mat, m1_mat, m2_mat, InCond_uvcmp, uv_cmp, mn_cmp]
+	initial_setup_parameters = [phi_mat, m1_mat, m2_mat, InCond_uvcmp, uv_cmp, mn_cmp]
         return initial_setup_parameters
         
-    def iterative_solver(self, Boundary_uv_type, Tn, initial_setup_parameters):
+    def iterative_solver(self, Boundary_uv_type, Tn, initial_setup_parameters, preconditioner='ILU'):
         n = self.n
         m = self.m
         dx = self.dx
         dy = self.dy
         dt = self.dt
         Re = self.Re
-        phi_mat_AMG = initial_setup_parameters[0]
+        phi_mat = initial_setup_parameters[0]
         m1_mat = initial_setup_parameters[1]
         m2_mat = initial_setup_parameters[2]
         # uvold_cmp: u and v velocity fields at time n-1
@@ -280,17 +340,27 @@ class Gauge_method():
         # main iterative solver
 	test_problem_name = Boundary_uv_type
         for t in xrange(Tn):
-	    forcing_term = structure2.Forcing_term(self.mesh, t).select_forcing_term(test_problem_name, t)
+	    forcing_term = structure2.Forcing_term(self.mesh, test_problem_name, t+0.5).select_forcing_term()
+#	    print forcing_term, 'forcing term'
+#	    print forcing_term[0], 'u forcing'
+#	    print forcing_term[1], 'v forcing'
             convc_uv = uv_cmp.non_linear_convection()
+#	    print convc_uv.get_uv()[0], 'convcu'
+#	    print convc_uv.get_uv()[1], 'convcv'
             preconvc_uv = uvold_cmp.non_linear_convection()
+#	    print preconvc_uv.get_uv()[0], 'convcu'
+#	    print preconvc_uv.get_uv()[1], 'convcv'
             diff_mn = mn_cmp.diffusion()
+#	    print diff_mn.get_uv()[0], 'diff m1n'
+#	    print diff_mn.get_uv()[1], 'diff m2n'
+#	    print mn_int.get_uv()[0], 'm1n int'
+#	    print mn_int.get_uv()[1], 'm2n int'
 	    if Boundary_uv_type == 'periodic_forcing_1':
 	        # Stokes problem
 	        rhs_mstar = mn_int + dt*((1.0/(2*Re))*diff_mn + forcing_term)  
 	    else:
 	        # full Navier Stokes problem
-                rhs_mstar = mn_int + dt*(-1.5*convc_uv + 0.5*preconvc_uv + (1.0/(2*Re))*diff_mn +\
-	       				forcing_term) 
+                rhs_mstar = mn_int + dt*(-1.5*convc_uv + 0.5*preconvc_uv + (1.0/(2*Re))*diff_mn + forcing_term) 
    
 #            print rhs_mstar.get_uv()[0], "rhs_m1*"
 #            print rhs_mstar.get_uv()[1], "rhs_m2*"
@@ -302,7 +372,6 @@ class Gauge_method():
             rhs_mstarcd = self.correct_boundary(rhs_mstar, t+1, Boundary_uv_type, gradphiuv)
 #            print rhs_mstarcd.get_uv()[0], "rhs_m1* corrected"
 #            print rhs_mstarcd.get_uv()[1], "rhs_m2* corrected"
-#            break 
             # solving for the Gauge variable m* 
             Linsys_solve = LinearSystem_solver(Re, self.mesh)
             mstar = Linsys_solve.Linsys_velocity_solver([m1_mat,m2_mat],  rhs_mstarcd)
@@ -311,8 +380,9 @@ class Gauge_method():
             mstarcmp1, uvbnd_value = structure2.VelocityComplete(self.mesh, [mstar.get_uv()[0],  mstar.get_uv()[1]], t+1).complete(Boundary_uv_type, return_bnd=True)
             div_mstar = mstarcmp1.divergence()
             # solving for the phi variable
-            [phi, residuals] = Linsys_solve.Poisson_pressure_solver(div_mstar, "AMG", phi_mat_AMG)
-            #print phi.get_value(), "phi"
+            phi = Linsys_solve.Poisson_pressure_solver(div_mstar, preconditioner, phi_mat)
+            print preconditioner
+	    #print phi.get_value(), "phi"
             if t == 0:
                 #div_mn = np.zeros((m,n))
                 div_mn = div_mstar
@@ -320,11 +390,15 @@ class Gauge_method():
                 div_mn = mn_cmp.divergence()
 #            print div_mn.get_value(), "div_mn"	 
             # correct (normalise) phi 
-            phiacd = self.phi_correction(phi, phin_cmp, div_mstar, div_mn, Boundary_uv_type)
+#            phiacd = self.phi_correction(phi, phin_cmp, div_mstar, div_mn, Boundary_uv_type)
 #            print phiacd.get_value(), "phi corrected"
-            
+            phiacd = phi - phin_cmp[1:m+1,1:n+1]
+
             # pressure correction step
             p = phiacd/dt - 1.0/(2*Re)*(div_mstar+div_mn)
+#	    print p.get_value(), 'pressure'
+	    print np.sum(p.get_value()), 'integral of p'
+	    gradp = p.gradient()
             phiold_cmp = np.copy(phin_cmp)
             phin_cmp = np.copy(phi.complete())
             # velocity update stemp
@@ -346,8 +420,8 @@ class Gauge_method():
 #            print mn_cmp.get_uv()[0], "mn1 complete"
 #            print mn_cmp.get_uv()[1], "mn2 complete"
             print "iteration "+str(t)
-            #break
-        return uv_cmp, p
+#            break
+        return uv_cmp, p, gradp
 
     ## this function calculates graident of phi at time n+1
     # using second order approximation to gradient of phi^(n+1). Used in correcting m*
@@ -586,27 +660,27 @@ class Alg1_method():
         self.mesh = mesh
     
     # initial set up
-    def setup(self, InCond, Boundary_uv_type):
+    def setup(self, InCond, Boundary_uv_type, preconditioner='ILU'):
         ## InCond_uv: specifies the velocity initial condition 
         linsys_solver = LinearSystem_solver(self.Re, self.mesh)
-        phi_mat_AMG = linsys_solver.Poisson_pressure_matrix("AMG")
+        phi_mat = linsys_solver.Poisson_pressure_matrix(preconditioner)
         u_mat = linsys_solver.Linsys_velocity_matrix("u")
         v_mat = linsys_solver.Linsys_velocity_matrix("v")
         
         InCond_uvcmp = structure2.VelocityComplete(self.mesh, InCond[0], 0).complete(Boundary_uv_type)
         uvn_cmp = copy.copy(InCond_uvcmp)
 	InCond_p = structure2.CentredPotential(InCond[1], self.mesh)
-        initial_setup_parameters = [phi_mat_AMG, u_mat, v_mat, InCond_uvcmp, uvn_cmp, InCond_p]
+        initial_setup_parameters = [phi_mat, u_mat, v_mat, InCond_uvcmp, uvn_cmp, InCond_p]
         return initial_setup_parameters
         
-    def iterative_solver(self, Boundary_uv_type, Tn, initial_setup_parameters):
+    def iterative_solver(self, Boundary_uv_type, Tn, initial_setup_parameters, preconditioner='ILU'):
         n = self.n
         m = self.m
         dx = self.dx
         dy = self.dy
         dt = self.dt
         Re = self.Re
-        phi_mat_AMG = initial_setup_parameters[0]
+        phi_mat = initial_setup_parameters[0]
         u_mat = initial_setup_parameters[1]
         v_mat = initial_setup_parameters[2]
         # uvold_cmp: u and v velocity fields at time n-1
@@ -624,7 +698,7 @@ class Alg1_method():
         # main iterative solver
 	test_problem_name = Boundary_uv_type
         for t in xrange(Tn):
-	    forcing_term = structure2.Forcing_term(self.mesh, t).select_forcing_term(test_problem_name, t)
+	    forcing_term = structure2.Forcing_term(self.mesh,test_problem_name,t+0.5).select_forcing_term()
             convc_uv = uvn_cmp.non_linear_convection()
             preconvc_uv = uvold_cmp.non_linear_convection()
             diff_uvn = uvn_cmp.diffusion()
@@ -654,14 +728,17 @@ class Alg1_method():
             uvstarcmp, uvbnd_value = structure2.VelocityComplete(self.mesh, [uvstar.get_uv()[0],  uvstar.get_uv()[1]], t+1).complete(Boundary_uv_type, return_bnd=True)
             div_uvstar = uvstarcmp.divergence()
             # solving for the phi variable
-            [phi, residuals] = Linsys_solve.Poisson_pressure_solver(div_uvstar/dt, "AMG", phi_mat_AMG)
+            #[phi, residuals] = Linsys_solve.Poisson_pressure_solver(div_uvstar/dt, "AMG", phi_mat)
+	    phi = Linsys_solve.Poisson_pressure_solver(div_uvstar/dt, preconditioner, phi_mat)
 #            print phi.get_value(), "phi"
-            # correct (normalise) phi 
-            phicd = self.phi_correction(phi, div_uvstar, Boundary_uv_type)
+#            # correct (normalise) phi 
+#            phicd = self.phi_correction(phi, div_uvstar, Boundary_uv_type)
 #            print phicd.get_value(), "phi corrected"
-            
+            #print np.sum(phicd.get_value()), 'integratin should be zero'
             # pressure correction step
-            p = pn + phicd - div_uvstar/(2*Re)
+            p = pn + phi - div_uvstar/(2*Re)
+#	    print p.get_value(), 'pressure'
+	    gradp = p.gradient()
             pold = copy.copy(pn)
             pn = copy.copy(p)
 #            phiold_cmp = np.copy(phin_cmp)
@@ -681,7 +758,7 @@ class Alg1_method():
 #            print uvn_cmp.get_int_uv()[1], "v new interior"            
             print "iteration "+str(t)
 #            break
-        return uvn_cmp, p
+        return uvn_cmp, p, gradp
 
     ## this function calculates graident of phi at time n+1
     # using second order approximation to gradient of phi^(n+1). Used in correcting m*
@@ -823,26 +900,26 @@ class Alg2_method():
         self.mesh = mesh
     
     # initial set up
-    def setup(self, InCond_uv_init, Boundary_uv_type):
+    def setup(self, InCond_uv_init, Boundary_uv_type, preconditioner='ILU'):
         ## InCond_uv: specifies the velocity initial condition 
         linsys_solver = LinearSystem_solver(self.Re, self.mesh)
-        phi_mat_AMG = linsys_solver.Poisson_pressure_matrix("AMG")
+	phi_mat = linsys_solver.Poisson_pressure_matrix(preconditioner)
         u_mat = linsys_solver.Linsys_velocity_matrix("u")
         v_mat = linsys_solver.Linsys_velocity_matrix("v")
         
         InCond_uvcmp = structure2.VelocityComplete(self.mesh, InCond_uv_init, 0).complete(Boundary_uv_type)
         uv_cmp = copy.copy(InCond_uvcmp)        
-        initial_setup_parameters = [phi_mat_AMG, u_mat, v_mat, InCond_uvcmp, uv_cmp]
+        initial_setup_parameters = [phi_mat, u_mat, v_mat, InCond_uvcmp, uv_cmp]
         return initial_setup_parameters
         
-    def iterative_solver(self, Boundary_uv_type, Tn, initial_setup_parameters):
+    def iterative_solver(self, Boundary_uv_type, Tn, initial_setup_parameters, preconditioner='ILU'):
         n = self.n
         m = self.m
         dx = self.dx
         dy = self.dy
         dt = self.dt
         Re = self.Re
-        phi_mat_AMG = initial_setup_parameters[0]
+        phi_mat = initial_setup_parameters[0]
         u_mat = initial_setup_parameters[1]
         v_mat = initial_setup_parameters[2]
         # uvold_cmp: u and v velocity fields at time n-1
@@ -862,7 +939,7 @@ class Alg2_method():
         # main iterative solver
 	test_problem_name = Boundary_uv_type
         for t in xrange(Tn):
-	    forcing_term = structure2.Forcing_term(self.mesh, t).select_forcing_term(test_problem_name, t)
+	    forcing_term = structure2.Forcing_term(self.mesh,test_problem_name,t+0.5).select_forcing_term()
             convc_uv = uvn_cmp.non_linear_convection()
             preconvc_uv = uvold_cmp.non_linear_convection()
             diff_uvn = uvn_cmp.diffusion()
@@ -881,9 +958,8 @@ class Alg2_method():
 #            print gradphiuv, "gradient of phi"
             # boundary correction step
             rhs_uvstarcd = self.correct_boundary(rhs_uvstar, t+1, Boundary_uv_type, gradphiuv)
-#            print rhs_mstarcd.get_uv()[0], "rhs_m1* corrected"
-#            print rhs_mstarcd.get_uv()[1], "rhs_m2* corrected"
-#            break 
+#            print rhs_uvstarcd.get_uv()[0], "rhs_m1* corrected"
+#            print rhs_uvstarcd.get_uv()[1], "rhs_m2* corrected"
             # solving for the Gauge variable m* 
             Linsys_solve = LinearSystem_solver(Re, self.mesh)
             uvstar = Linsys_solve.Linsys_velocity_solver([u_mat,v_mat],  rhs_uvstarcd)
@@ -891,21 +967,26 @@ class Alg2_method():
 #            print uvstar.get_uv()[1], "v*"
             uvstarcmp = structure2.VelocityComplete(self.mesh, [uvstar.get_uv()[0],  uvstar.get_uv()[1]], t+1).complete(Boundary_uv_type)
             div_uvstar = uvstarcmp.divergence()
+#	    print div_uvstar.get_value(), 'div uv*'
             # solving for the phi variable
-            [phi, residuals] = Linsys_solve.Poisson_pressure_solver(div_uvstar/dt, "AMG", phi_mat_AMG)
-            #print phi.get_value(), "phi"
-            # correct (normalise) phi 
-            phicd = self.phi_correction(phi, div_uvstar, Boundary_uv_type)
-#            print phiacd.get_value(), "phi corrected"
-            
+            #[phi, residuals] = Linsys_solve.Poisson_pressure_solver(div_uvstar/dt, "AMG", phi_mat)
+            phi = Linsys_solve.Poisson_pressure_solver(div_uvstar/dt, preconditioner, phi_mat)
+	   #print phi.get_value(), "phi"
+#            # correct (normalise) phi 
+#            phicd = self.phi_correction(phi, div_uvstar, Boundary_uv_type)
+#            print phicd.get_value(), "phi corrected"
             # pressure correction step
-            p = phicd - div_uvstar/(2*Re)
+
+            p = phi - div_uvstar/(2*Re)
+	    gradp = p.gradient()
+#	    print p.get_value(), 'pressure'
+#	    print phicd.get_value(), 'phicd'
             phiold_cmp = np.copy(phin_cmp)
             phin_cmp = np.copy(phi.complete())
             # velocity update stemp
             gradphi = phi.gradient()
-    ##        print gradphi[0], "gradphi u"
-    ##        print gradphi[1], "gradphi v"
+#            print gradphi.get_uv()[0], "gradphi u"
+#            print gradphi.get_uv()[1], "gradphi v"
             uvn_int = uvstar - dt*gradphi
 #            print uvn_int.get_uv()[0], "u new interior"
 #            print uvn_int.get_uv()[1], "v new interior"
@@ -917,7 +998,7 @@ class Alg2_method():
 #            print uv_cmp.get_int_uv()[1], "v new interior"            
             print "iteration "+str(t)
             #break
-        return uvn_cmp, p
+        return uvn_cmp, p, gradp
 
     ## this function calculates graident of phi at time n+1
     # using second order approximation to gradient of phi^(n+1). Used in correcting m*
@@ -1089,13 +1170,15 @@ class Alg2_method():
 class Error():
     ''' This class calculates the error norms for the solver by comparing the numerical and analyticalsolutions'''
 
-    def __init__(self, uv_cmp, uv_exact_bnd, p, p_exact, div_uv, mesh):
+    def __init__(self, uv_cmp, uv_exact_bnd, p, p_exact, gradp, gradp_exact, div_uv, mesh):
         self.mesh = mesh
         self.uv_cmp = uv_cmp
         self.uv_bnd = uv_cmp.get_bnd_uv()
         self.uv_exact_bnd = uv_exact_bnd
         self.p_exact = p_exact
         self.p = p
+	self.gradp = gradp
+	self.gradp_exact = gradp_exact
         self.div_uv = div_uv
 
     def velocity_error(self):
@@ -1136,3 +1219,22 @@ class Error():
 
         return perror_dict
 
+    def pressure_gradient_error(self):
+        n = self.mesh.n
+        m = self.mesh.m
+        
+	gradp_error = self.gradp - self.gradp_exact
+	gradpu_error, gradpv_error = gradp_error.get_uv()
+        gradpu_errorv = np.ravel(gradpu_error)
+	gradpv_errorv = np.ravel(gradpv_error)
+	gradperror_list = []
+	for gradpe in [gradpu_errorv, gradpv_errorv]:
+            a=sum(abs(gradpe[:])**2)/(m**2)
+            Linfp = abs(gradpe[:]).max()
+            L1p = sum(abs(gradpe[:]))/(m**2)
+            L2p = np.sqrt(a)
+            gradperror_dict = {'L1': L1p, 'L2': L2p, 'Linf': Linfp}
+	    gradperror_list.append(gradperror_dict)
+	avg_gradp_error_dict = {'L1': (gradperror_list[0]['L1']+gradperror_list[1]['L1'])/2, 'L2': (gradperror_list[0]['L2']+gradperror_list[1]['L2'])/2, 'Linf': (gradperror_list[0]['Linf']+gradperror_list[1]['Linf'])/2}
+
+        return gradperror_list[0], gradperror_list[1], avg_gradp_error_dict
