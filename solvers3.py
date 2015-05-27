@@ -732,7 +732,7 @@ class Alg2_method():
     def setup(self, InCond, Boundary_uv_type, solve_method='ILU', integration_method='Riemann'):
         ## InCond_uv: specifies the velocity initial condition 
         linsys_solver = LinearSystem_solver(self.Re, self.mesh, integration_method)
-        phi_mat = linsys_solver.Poisson_pressure_matrix(preconditioner)
+        phi_mat = linsys_solver.Poisson_pressure_matrix(solve_method)
         u_mat = linsys_solver.Linsys_velocity_matrix("u")
         v_mat = linsys_solver.Linsys_velocity_matrix("v")
         
@@ -914,7 +914,7 @@ class Alg3_method():
     def setup(self, InCond_uv_init, Boundary_uv_type, solve_method='ILU', integration_method='Riemann'):
         ## InCond_uv: specifies the velocity initial condition 
         linsys_solver = LinearSystem_solver(self.Re, self.mesh)
-	phi_mat = linsys_solver.Poisson_pressure_matrix(preconditioner)
+	phi_mat = linsys_solver.Poisson_pressure_matrix(solve_method)
         u_mat = linsys_solver.Linsys_velocity_matrix("u")
         v_mat = linsys_solver.Linsys_velocity_matrix("v")
         
