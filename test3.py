@@ -74,10 +74,12 @@ def get_inputs():
 		Error_analysis_option = raw_input('Error analysis ? (Y/N)')
 		if 'Y' in Error_analysis_option:
 			Error_analysis_option = True
-			return xl, xr, t0, tf, Error_analysis_option, method, test_problem_name
+			CFL, Re = opt_param()
+			return xl, xr, t0, tf, Error_analysis_option, method, test_problem_name, CFL, Re
 		elif 'y' in Error_analysis_option:
 			Error_analysis_option = True
-			return xl, xr, t0, tf, Error_analysis_option, method, test_problem_name
+			CFL, Re = opt_param()
+			return xl, xr, t0, tf, Error_analysis_option, method, test_problem_name, CFL, Re
 		elif Error_analysis_option == '':
 			# take default
 			Error_analysis_option = False
@@ -103,8 +105,41 @@ def get_inputs():
 		plot_option = False
 	else:
 		plot_option = False
+	
+	CFL, Re = opt_param()
 
-	return xl, xr, t0, tf, gridsize, method, test_problem_name, plot_option
+	return xl, xr, t0, tf, gridsize, method, test_problem_name, plot_option, CFL, Re
+
+def opt_param():
+	optional_parameters = raw_input('optional parameters e.g CFL number and Reynolds number? (Y/N) ')
+	if 'Y' in optional_parameters or 'y' in optional_parameters:
+		CFL = raw_input('CFL number (e.g 0.5): ')
+		while CFL == '':
+			# take default value
+			CFL = 0.5
+		try:
+			CFL = float(CFL)
+		except ValueError:
+			CFL = float(raw_input('CFL number must be floating point number, try again: '))
+	
+		Re = raw_input('Reynolds number (e.g 1): ')
+		while Re == '':
+			# take default value
+			Re = 1.0
+		try:
+			Re = float(Re)
+		except ValueError:
+			Re = float(raw_input('Reynolds number must be floating point number or integer, try again: '))
+
+	elif optional_parameters == '':
+		# take default
+		CFL = 0.1
+		Re = 1.0
+	else:
+		# take default
+		CFL = 0.1
+		Re = 1.0
+	return CFL, Re
 
 def error_analysis(xl, xr, t0, tf, method, test_problem_name, CFL=0.1, Re=1.0):
 	# run 4 iterations: n = m = 15, 30, 60, 120
@@ -330,11 +365,11 @@ def run_Navier_Stokes_solver(xl, xr, t0, tf, gridsize, method, test_problem_name
 if __name__ == "__main__":
 	inputs = get_inputs()
 	if type(inputs[4]) == bool:
-		xl, xr, t0, tf, gridsize, method, test_problem_name = inputs
-		error_analysis(xl, xr, t0, tf, method, test_problem_name, CFL=0.1)
+		xl, xr, t0, tf, gridsize, method, test_problem_name, CFL, Re = inputs
+		error_analysis(xl, xr, t0, tf, method, test_problem_name, CFL, Re)
 	else:
-		xl, xr, t0, tf, gridsize, method, test_problem_name, plot_option = inputs
-		Velocity_error, Pressure_error, avg_gradp_error, dt = run_Navier_Stokes_solver(xl, xr, t0, tf, gridsize, method, test_problem_name, plot_option)
+		xl, xr, t0, tf, gridsize, method, test_problem_name, plot_option, CFL, Re = inputs
+		Velocity_error, Pressure_error, avg_gradp_error, dt = run_Navier_Stokes_solver(xl, xr, t0, tf, gridsize, method, test_problem_name, plot_option, CFL, Re)
 		print "U velocity error is %s " % Velocity_error[0]
 		print "V velocity error is %s " % Velocity_error[1]
 		print "Pressure error is %s " % Pressure_error
