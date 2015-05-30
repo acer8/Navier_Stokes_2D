@@ -16,12 +16,12 @@ Copyright 2015 Stephen Roberts, Hongji Zhang
 Installation
 ------------
 
-You can simply download the 3 files: solver3.py, structure3.py and test3.py. However you will need to install the dependencies first. They are: matplotlib (version >= 1.3.1), numpy (version >= 1.8.2) and scipy (version >= 0.14.0).
+You can simply download the 3 files: solvers.py, structure.py and run_solvers.py. However you will need to install the dependencies first. They are: matplotlib (version >= 1.3.1), numpy (version >= 1.8.2) and scipy (version >= 0.14.0).
 
 Introduction
 ------------
 
-You can run a couple of Navier Stokes problem simulations by running the script test3.py. Then a user interface will appear in your command line. It asks you basic input information, such as the test fluid flow problem, type of projection method and spatial and temporal domain ... Just follow the prompts. If you hit enter without entering any value, Navier_Stokes_2D will take the default values.
+You can run a couple of Navier Stokes problem simulations by running the script run_solvers.py. Then a user interface will appear in your command line. It asks you basic input information, such as the test fluid flow problem, type of projection method and spatial and temporal domain ... Just follow the prompts. If you hit enter without entering any value, Navier_Stokes_2D will take the default values.
 
 You can either run accuracy tests for projection methods or you can just run simulations of particular fluid flow problems with an arbitrary domain and precision (controled by spatial grid size). If you run accuracy tests, then the solver will run for several times with grid size doubled each time, and you will be presented with the convergence test results for both velocity and pressure. If you run direct simulations, you will be presented with the 3D surface plots of velocity and pressure as well as the pressure error plot (if applicable).
 
