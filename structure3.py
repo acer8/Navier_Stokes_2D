@@ -28,7 +28,8 @@ class mesh:
         self.tdomain = time_domain
         self.CFL = CFL
         # dt: delta t
-        self.dt1 = abs(((self.sdomain[0][1] - self.sdomain[0][0])/self.gds[0])*CFL)
+#        self.dt1 = abs(((self.sdomain[0][1] - self.sdomain[0][0])/self.gds[0])*CFL)
+	self.dt1 = CFL/(1.0/self.dx + 1.0/self.dy)
         # tn: number of iterations
         self.Tn = int(round(self.tdomain[1]/self.dt1))
 	self.dt = abs(float(self.tdomain[1] - self.tdomain[0]))/self.Tn

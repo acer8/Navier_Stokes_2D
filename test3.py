@@ -12,7 +12,7 @@ import solvers3
 def get_inputs():
 	test_problem_dict = {1:'Taylor', 2:'periodic_forcing_1', 
 				3:'periodic_forcing_2', 4:'driven_cavity'}
-	test_problem_index = raw_input('Choose the test problem from below [1:Taylor, 2:periodic_forcing_1, 3:periodic_forcing_2, 4:driven_cavity]: ')
+	test_problem_index = raw_input('Choose the test problem from below [1:Taylor (default), 2:periodic_forcing_1, 3:periodic_forcing_2, 4:driven_cavity]: ')
 	while test_problem_index == '':
 		# take default
 		test_problem_index = 1
@@ -23,7 +23,7 @@ def get_inputs():
 	test_problem_name = test_problem_dict[test_problem_index]
 
 	method_dict = {1:'Gauge', 2:'Alg1', 3:'Alg2', 4:'Alg3'}
-	method_index = raw_input('Choose the numerical algorithm from below [1:Gauge, 2:Alg1, 3:Alg2, 4:Alg3]: ')
+	method_index = raw_input('Choose the numerical algorithm from below [1:Gauge (default), 2:Alg1, 3:Alg2, 4:Alg3]: ')
 	while method_index == '':
 		# take default
 		method_index = 1
@@ -33,7 +33,7 @@ def get_inputs():
 		method_index = int(raw_input('index of the method must be integers, try again: '))
 	method = method_dict[method_index]
 
-	space_input = raw_input('Enter the end points of the spatial domain (e.g 0,1): ')
+	space_input = raw_input('Enter the end points of the spatial domain (e.g. 0,1): ')
 	while space_input == '':
 		# take default (different for each problem)
 		if test_problem_name == 'Taylor':
@@ -55,7 +55,7 @@ def get_inputs():
 			xl = float(xl)
 			xr = float(xr)
 	
-	time_input = raw_input('Enter the start and end time (e.g 0,1): ')
+	time_input = raw_input('Enter the start and end time (default: 0,1): ')
 	while time_input == '':
 		# take default
 		time_input = '0,1'
@@ -71,22 +71,27 @@ def get_inputs():
 	if test_problem_name == 'driven_cavity':
 		pass
 	else:
-		Error_analysis_option = raw_input('Error analysis ? (Y/N)')
-		if 'Y' in Error_analysis_option:
+		Error_analysis_option = raw_input('Error analysis ? (Y/N) (default no) ')
+		if 'Y' in Error_analysis_option or 'y' in Error_analysis_option:
 			Error_analysis_option = True
+			Niter = raw_input('How many times you want to run the solver? (Default is 5 and this corresponds to grid size of 15, 30, 60, 120 and 240): ')
+			while Niter == '':
+				# take default value
+				Niter = 5
+			try:
+				Niter = int(Niter)
+			except ValueError:
+				Niter = int(raw_input('Number of runs must be an integer, try again: '))
+
 			CFL, Re = opt_param()
-			return xl, xr, t0, tf, Error_analysis_option, method, test_problem_name, CFL, Re
-		elif 'y' in Error_analysis_option:
-			Error_analysis_option = True
-			CFL, Re = opt_param()
-			return xl, xr, t0, tf, Error_analysis_option, method, test_problem_name, CFL, Re
+			return xl, xr, t0, tf, Error_analysis_option, method, test_problem_name, CFL, Re, Niter
 		elif Error_analysis_option == '':
 			# take default
 			Error_analysis_option = False
 		else:
 			Error_analysis_option = False
 
-	gridsize = raw_input('Enter the size of the spatial grid (e.g 30): ')
+	gridsize = raw_input('Enter the size of the spatial grid (default 30): ')
 	while gridsize == '':
 		# take default value
 		gridsize = 30
@@ -95,7 +100,7 @@ def get_inputs():
 	except ValueError:
 		gridsize = int(raw_input('Grid size must be integers, try again: '))
 
-	plot_option = raw_input('plot result optional (Y/N): ')
+	plot_option = raw_input('plot results optional (Y/N): (default no)')
 	if 'Y' in plot_option:
 		plot_option = True
 	elif 'y' in plot_option:
@@ -111,25 +116,25 @@ def get_inputs():
 	return xl, xr, t0, tf, gridsize, method, test_problem_name, plot_option, CFL, Re
 
 def opt_param():
-	optional_parameters = raw_input('optional parameters e.g CFL number and Reynolds number? (Y/N) ')
+	optional_parameters = raw_input('optional parameters e.g CFL number and Reynolds number? (Y/N) (default no)')
 	if 'Y' in optional_parameters or 'y' in optional_parameters:
-		CFL = raw_input('CFL number (e.g 0.5): ')
+		CFL = raw_input('CFL number (default 0.2): ')
 		while CFL == '':
 			# take default value
-			CFL = 0.5
+			CFL = 0.2
 		try:
 			CFL = float(CFL)
 		except ValueError:
-			CFL = float(raw_input('CFL number must be floating point number, try again: '))
+			CFL = float(raw_input('CFL number must be a floating point number, try again: '))
 	
-		Re = raw_input('Reynolds number (e.g 1): ')
+		Re = raw_input('Reynolds number (default 1): ')
 		while Re == '':
 			# take default value
 			Re = 1.0
 		try:
 			Re = float(Re)
 		except ValueError:
-			Re = float(raw_input('Reynolds number must be floating point number or integer, try again: '))
+			Re = float(raw_input('Reynolds number must be a floating point number or integer, try again: '))
 
 	elif optional_parameters == '':
 		# take default
@@ -141,12 +146,16 @@ def opt_param():
 		Re = 1.0
 	return CFL, Re
 
-def error_analysis(xl, xr, t0, tf, method, test_problem_name, CFL=0.1, Re=1.0):
-	# run 4 iterations: n = m = 15, 30, 60, 120
+def error_analysis(xl, xr, t0, tf, method, test_problem_name, CFL=0.1, Re=1.0, Niter=5):
+	# Niter: number of iterations. e.g Niter = [15, 30, 60, 120, 240]
 	U_convg = {}
 	P_convg = {}
 	log_dt = []
-	for i in [15, 30, 60, 120]:
+	start_grid = 15
+	gridsizel = start_grid*(2**np.linspace(0, Niter-1, Niter))
+	gridsizel = gridsizel.astype(np.int)
+
+	for i in gridsizel:
 		gridsize = i
 		Velocity_error, Pressure_error, avg_gradp_error, dt = run_Navier_Stokes_solver(xl, xr, t0, tf, gridsize, method, test_problem_name, plot_option=False, CFL=CFL)
 		UL1 = np.log(Velocity_error[0]['L1'])
@@ -160,25 +169,30 @@ def error_analysis(xl, xr, t0, tf, method, test_problem_name, CFL=0.1, Re=1.0):
 		P_convg.update({i:[PL1, PL2, PLinf]})
 		#break	
 		log_dt.append(np.log(dt))
-
-	log_UL1_error = np.array([U_convg[15][0], U_convg[30][0], U_convg[60][0], U_convg[120][0]])
+	
+	# gsi: index for different gridsize: 15, 30, 60...
+	log_UL1_error = np.array([U_convg[gsi][0] for gsi in gridsizel])
 	U_slope_L1, U_intercept_L1, r_value, p_value, std_err = stats.linregress(np.array(log_dt), log_UL1_error)
 	print U_slope_L1, 'U velocity L1 convergence rate is %s' % U_slope_L1
-	log_UL2_error = np.array([U_convg[15][1], U_convg[30][1], U_convg[60][1], U_convg[120][1]])
+	log_UL2_error = np.array([U_convg[gsi][1] for gsi in gridsizel])
 	U_slope_L2, U_intercept_L2, r_value, p_value, std_err = stats.linregress(np.array(log_dt), log_UL2_error)
 	print U_slope_L2, 'U velocity L2 convergence rate is %s' % U_slope_L2
-	log_ULinf_error = np.array([U_convg[15][2], U_convg[30][2], U_convg[60][2], U_convg[120][2]])
+	log_ULinf_error = np.array([U_convg[gsi][2] for gsi in gridsizel])
 	U_slope_Linf, U_intercept_Linf, r_value, p_value, std_err = stats.linregress(np.array(log_dt), log_ULinf_error)
 	print U_slope_Linf, 'U velocity Linf convergence rate is %s' % U_slope_Linf
 
-	log_PL1_error = np.array([P_convg[15][0], P_convg[30][0], P_convg[60][0], P_convg[120][0]])
-	P_slope_L1, P_intercept_L1, r_value, p_value, std_err = stats.linregress(np.array(log_dt), log_PL1_error)
+	# only take grids bigger than 15, because the errors approaching the limit asymptotically and a too small grid is not very useful (especially for pressure)
+	log_PL1_error = np.array([P_convg[gsi][0] for gsi in gridsizel])
+	P_slope_L1, P_intercept_L1, r_value, p_value, std_err = stats.linregress(np.array(log_dt)[1:], log_PL1_error[1:])
+	#P_slope_L1, P_intercept_L1, r_value, p_value, std_err = stats.linregress(np.array(log_dt), log_PL1_error)
 	print P_slope_L1, 'P L1 convergence rate is %s' % P_slope_L1
-	log_PL2_error = np.array([P_convg[15][1], P_convg[30][1], P_convg[60][1], P_convg[120][1]])
-	P_slope_L2, P_intercept_L2, r_value, p_value, std_err = stats.linregress(np.array(log_dt), log_PL2_error)
+	log_PL2_error = np.array([P_convg[gsi][1] for gsi in gridsizel])
+	P_slope_L2, P_intercept_L2, r_value, p_value, std_err = stats.linregress(np.array(log_dt)[1:], log_PL2_error[1:])
+	#P_slope_L2, P_intercept_L2, r_value, p_value, std_err = stats.linregress(np.array(log_dt), log_PL2_error)
 	print P_slope_L2, 'P L2 convergence rate is %s' % P_slope_L2
-	log_PLinf_error = np.array([P_convg[15][2], P_convg[30][2], P_convg[60][2], P_convg[120][2]])
-	P_slope_Linf, P_intercept_Linf, r_value, p_value, std_err = stats.linregress(np.array(log_dt), log_PLinf_error)
+	log_PLinf_error =  np.array([P_convg[gsi][2] for gsi in gridsizel])
+	P_slope_Linf, P_intercept_Linf, r_value, p_value, std_err = stats.linregress(np.array(log_dt)[1:], log_PLinf_error[1:])
+	#P_slope_Linf, P_intercept_Linf, r_value, p_value, std_err = stats.linregress(np.array(log_dt), log_PLinf_error)
 	print P_slope_Linf, 'P Linf convergence rate is %s' % P_slope_Linf
 
 	log_dt = np.array(log_dt)
@@ -365,8 +379,8 @@ def run_Navier_Stokes_solver(xl, xr, t0, tf, gridsize, method, test_problem_name
 if __name__ == "__main__":
 	inputs = get_inputs()
 	if type(inputs[4]) == bool:
-		xl, xr, t0, tf, gridsize, method, test_problem_name, CFL, Re = inputs
-		error_analysis(xl, xr, t0, tf, method, test_problem_name, CFL, Re)
+		xl, xr, t0, tf, gridsize, method, test_problem_name, CFL, Re, Niter = inputs
+		error_analysis(xl, xr, t0, tf, method, test_problem_name, CFL, Re, Niter)
 	else:
 		xl, xr, t0, tf, gridsize, method, test_problem_name, plot_option, CFL, Re = inputs
 		Velocity_error, Pressure_error, avg_gradp_error, dt = run_Navier_Stokes_solver(xl, xr, t0, tf, gridsize, method, test_problem_name, plot_option, CFL, Re)
